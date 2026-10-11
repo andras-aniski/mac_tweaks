@@ -42,6 +42,8 @@ ALLOWED_SHELL = [
     "git diff", "git log", "git show", "git blame", "git grep", "git status",
     "cd", "pwd", "ls", "cat", "head", "tail", "wc", "grep", "rg", "sort", "uniq", "diff",
 ]
+EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"]  # --reasoning-effort
+CONTEXTS = ["default", "long_context"]  # --context: the context window tier
 # a backstop: deny rules win over allow rules
 DENIED_TOOLS = ["shell(gh)", "shell(git push)", "shell(git fetch)", "shell(curl)", "shell(wget)", "url"]
 
@@ -259,8 +261,9 @@ def remove_checkout(workdir):
     shutil.rmtree(os.path.join(workdir, "checkout"), ignore_errors=True)
 
 
-def start(key, workdir, session_id, base, model=None, max_ai_credits=None):
-    """Start Copilot in the background; returns the Popen. It outlives the app, so a restart can pick it up."""
+def start(key, workdir, session_id, base, model=None, effort=None, context=None, max_ai_credits=None):
+    """Start Copilot in the background; returns the Popen. It outlives the app, so a restart can pick it up.
+    model, effort, context: None for Copilot's own setting. The subagents inherit them."""
     copilot = find_copilot()
     if not copilot:
         raise RuntimeError("Copilot CLI not found; install it with `brew install copilot-cli`")
@@ -282,6 +285,10 @@ def start(key, workdir, session_id, base, model=None, max_ai_credits=None):
     cmd += [f"--deny-tool={tool}" for tool in DENIED_TOOLS]
     if model:
         cmd += ["--model", model]
+    if effort:
+        cmd += ["--reasoning-effort", effort]
+    if context:
+        cmd += ["--context", context]
     if max_ai_credits:
         cmd += ["--max-ai-credits", str(max_ai_credits)]
     # COPILOT_ALLOW_ALL would approve every tool, and "true" would also trust the checkout's hooks and MCP servers

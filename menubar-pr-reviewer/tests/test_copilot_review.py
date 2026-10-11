@@ -167,3 +167,15 @@ def test_default_model_is_copilots_own_setting(tmp_path, monkeypatch):
     assert cr.default_model() == "claude-sonnet-5.5"
     settings.write_text("// not JSON")
     assert cr.default_model() is None
+
+
+def test_start_passes_the_model_effort_and_context(tmp_path, monkeypatch):
+    runs = []
+    monkeypatch.setattr(cr, "find_copilot", lambda: "copilot")
+    monkeypatch.setattr(cr.subprocess, "Popen", lambda cmd, **kw: runs.append(cmd))
+    cr.start("acme/web#1", str(tmp_path), "s", "main", model="claude-opus-5.5", effort="high", context="default")
+    cr.start("acme/web#1", str(tmp_path), "s", "main")
+    flags = [[a for a in cmd if a in ("--model", "--reasoning-effort", "--context")] for cmd in runs]
+    assert flags == [["--model", "--reasoning-effort", "--context"], []]
+    cmd = runs[0]
+    assert cmd[cmd.index("--reasoning-effort") + 1] == "high" and cmd[cmd.index("--context") + 1] == "default"

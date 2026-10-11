@@ -84,6 +84,28 @@ def test_budget_share_is_colored(app):
     assert app._spending_summary()[0] == ("⚠︎ Over budget", m.RED)
 
 
+def test_set_effort_and_context(app):
+    app.set_review_option("copilot_effort", "xhigh")
+    app.set_review_option("copilot_context", "default")
+    config = m.load_config()
+    assert (config["copilot_effort"], config["copilot_context"]) == ("xhigh", "default")
+
+
+def test_reviews_start_with_the_chosen_model_effort_and_context(app, monkeypatch):
+    started = []
+    monkeypatch.setattr(m.copilot_review, "prepare", lambda key, workdir, clones, token: {"base": "main"})
+    monkeypatch.setattr(m.copilot_review, "start", lambda *a, **kw: started.append(kw) or None)
+    monkeypatch.setattr(app, "_review_started", lambda *a: None)
+    load(app, make_pr(1))
+    app.set_model("claude-opus-5.5")
+    app.set_review_option("copilot_effort", "high")
+    app._start_review(key(1))
+    assert {k: started[0][k] for k in ("model", "effort", "context")} == {
+        "model": "claude-opus-5.5", "effort": "high", "context": "long_context"}
+    job = app.state["reviews"][key(1)]
+    assert (job["model"], job["effort"], job["context"]) == ("claude-opus-5.5", "high", "long_context")
+
+
 def test_set_model(app):
     app.set_model("gpt-6.1-sol")
     assert m.load_config()["copilot_model"] == "gpt-6.1-sol"

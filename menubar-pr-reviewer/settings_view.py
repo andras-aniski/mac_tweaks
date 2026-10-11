@@ -1,5 +1,5 @@
-"""The Settings window: the tracked repos, how often to check, the author lists, the budget, the review model and
-the automation.
+"""The Settings window: the tracked repos, how often to check, the author lists, the budget, the review model,
+effort and context, and the automation.
 
 Changes apply right away: a text field when you press Return or leave it, a checkbox or a pop-up when you click it. The app
 calls update() whenever the config changes, also from outside the window (the command line, a hand edit).
@@ -48,6 +48,12 @@ FIELDS = (  # name, label, width (None: the whole column), unit
     ("wait", "Wait before reviewing", 60, "minutes"),
 )
 MODEL_W = 280
+OPTIONS = (  # config key, label, [(value, title)]: the pop-ups under Review model
+    ("copilot_effort", "Thinking effort", [("none", "None"), ("minimal", "Minimal"), ("low", "Low"),
+                                           ("medium", "Medium"), ("high", "High"), ("xhigh", "Extra high"),
+                                           ("max", "Max")]),
+    ("copilot_context", "Context window", [("default", "Standard"), ("long_context", "Long context")]),
+)
 
 AUTOMATION = (
     ("review", "Review automatically", "PRs in To review, once the wait is over"),
@@ -109,7 +115,7 @@ class SettingsWindow:
     def __init__(self, actions):
         """actions: the app. It has track_repo(text) and set_poll / set_wait / set_budget(text), which return an
         error message or None, set_authors(name, text), remove_repo(key), set_automation(name, on),
-        set_model(model or None) and show_prompt(_)."""
+        set_model(model or None), set_review_option(key, value) and show_prompt(_)."""
         self.actions = actions
         self.targets = []  # AppKit doesn't retain targets
         self.dirty = set()  # fields typed in but not committed yet: update() leaves them alone
@@ -166,6 +172,16 @@ class SettingsWindow:
         self.model_hint = _label("", 11, NSColor.secondaryLabelColor(), wrap=True)
         for view in (self.model_label, self.model_popup, self.model_hint):
             self.view.addSubview_(view)
+        self.options = {}  # config key -> (label, pop-up, values)
+        for key, text, choices in OPTIONS:
+            label = _label(text + ":")
+            label.setAlignment_(NSTextAlignmentRight)
+            popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(NSMakeRect(0, 0, 160, 25), False)
+            popup.addItemsWithTitles_([title for _, title in choices])
+            self._on(popup, lambda key=key: self._pick_option(key))
+            self.view.addSubview_(label)
+            self.view.addSubview_(popup)
+            self.options[key] = (label, popup, [value for value, _ in choices])
         self.checks = {}
         for name, title, hint in AUTOMATION:
             target = self._target(lambda name=name: self._toggle(name))
@@ -272,10 +288,12 @@ class SettingsWindow:
             field(name)
         heading("Copilot reviews")
         field("budget")
-        place(self.model_label, MARGIN, LABEL_W, 17)
-        self.model_label.setFrameOrigin_(NSMakePoint(MARGIN, y + 4))
-        place(self.model_popup, CONTROL_X - 3, MODEL_W, 25)  # the pop-up's bezel is inset: line it up with the fields
-        y += 30
+        for label, popup, width in [(self.model_label, self.model_popup, MODEL_W)] + [
+                (label, popup, 160) for label, popup, _ in self.options.values()]:
+            place(label, MARGIN, LABEL_W, 17)
+            label.setFrameOrigin_(NSMakePoint(MARGIN, y + 4))
+            place(popup, CONTROL_X - 3, width, 25)  # the pop-up's bezel is inset: line it up with the fields
+            y += 30
         hint(self.model_hint, CONTROL_X, CONTROL_W)
         y += 10
         heading("Automation")
@@ -342,6 +360,8 @@ class SettingsWindow:
             else:
                 f["hint"].setAttributedStringValue_(_colored([(hints[name], None)]))
         self._fill_models()
+        for key, (_, popup, values) in self.options.items():
+            popup.selectItemAtIndex_(values.index(self.config[key]))
         for name, (box, _) in self.checks.items():
             box.setState_(int(automation[name]))
         self.repo_error_label.setStringValue_(self.repo_error or "")
@@ -366,7 +386,8 @@ class SettingsWindow:
                     self.model_popup.addItemWithTitle_(title)
         self.model_popup.selectItemAtIndex_(values.index(current))
         self.model_hint.setStringValue_(
-            "Used by the reviews that start from now on. Copilot default: the model set in Copilot CLI (/model)."
+            "Used by the reviews that start from now on, for the orchestrator and its agents. Copilot default: the "
+            "model set in Copilot CLI (/model). Long context is priced higher on the models that have it."
         )
 
     # actions
@@ -406,6 +427,11 @@ class SettingsWindow:
         alert.addButtonWithTitle_("Cancel")
         if alert.runModal() == NSAlertFirstButtonReturn:
             self.actions.remove_repo(key)
+
+    def _pick_option(self, key):
+        _, popup, values = self.options[key]
+        self.actions.set_review_option(key, values[popup.indexOfSelectedItem()])
+        self._refresh()
 
     def _pick_model(self):
         self.actions.set_model(self.model_values[self.model_popup.indexOfSelectedItem()])

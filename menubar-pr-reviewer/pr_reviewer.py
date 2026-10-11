@@ -77,6 +77,8 @@ from PyObjCTools import AppHelper
 
 DEFAULT_POLL_MINUTES = 15
 AUTOMATION_DEFAULTS = {"wait_minutes": 30, "review": False, "push": False, "approve": False}
+REVIEW_DEFAULTS = {"copilot_effort": "medium", "copilot_context": "long_context"}  # what reviews run with
+REVIEW_CHOICES = {"copilot_effort": copilot_review.EFFORTS, "copilot_context": copilot_review.CONTEXTS}
 RETRY_SECONDS = 120
 STARTUP_GRACE = 5 * 60  # nothing automatic this soon after the app starts: time to see what's due
 MAX_LISTED = 10  # per group; the rest go in a submenu
@@ -999,6 +1001,9 @@ def load_config():
     model = config.get("copilot_model")
     if not (isinstance(model, str) and model.strip()):
         config.pop("copilot_model", None)  # Copilot's default
+    for name, default in REVIEW_DEFAULTS.items():
+        if config.get(name) not in REVIEW_CHOICES[name]:
+            config[name] = default
     return config
 
 
@@ -1015,7 +1020,7 @@ def load_state():
         "known": state.get("known") if isinstance(state.get("known"), dict) else {},  # repo -> PR numbers seen
         "ignored": state.get("ignored") if isinstance(state.get("ignored"), list) else [],  # "owner/repo#123"
         # key -> Copilot review: {"status": preparing|running|done|failed, "session", "started", "pid", "head",
-        #                         "model", "comments", "credits", "error"}
+        #                         "model", "effort", "context", "comments", "credits", "error"}
         "reviews": state.get("reviews") if isinstance(state.get("reviews"), dict) else {},
         # key -> the PR's last activity when its last review started: no automatic review without anything new
         "reviewed_activity": state.get("reviewed_activity") if isinstance(state.get("reviewed_activity"), dict) else {},
@@ -1052,7 +1057,7 @@ class PRReviewerApp(rumps.App):
             self.config = load_config()
         except ValueError:
             self.config = {"repos": [], "allow": [], "block": [], "automation": dict(AUTOMATION_DEFAULTS),
-                           "poll_minutes": DEFAULT_POLL_MINUTES}
+                           "poll_minutes": DEFAULT_POLL_MINUTES, **REVIEW_DEFAULTS}
         self.config_mtime = config_mtime()
         self.state = load_state()
         for job in self.state["reviews"].values():
@@ -1611,11 +1616,15 @@ class PRReviewerApp(rumps.App):
         self.state["reviews"][key] = {
             "status": "preparing", "session": session, "started": time.time(),
             "title": pr["title"], "author": pr["author"], "auto": auto,
-            "model": self.config.get("copilot_model") or copilot_review.default_model(),  # for the statistics
+            # for the statistics
+            "model": self.config.get("copilot_model") or copilot_review.default_model(),
+            "effort": self.config["copilot_effort"], "context": self.config["copilot_context"],
         }
+        options = {"model": self.config.get("copilot_model"), "effort": self.config["copilot_effort"],
+                   "context": self.config["copilot_context"]}
         self._save_state()
         self._render()
-        threading.Thread(target=self._review_worker, args=(key, session), daemon=True).start()
+        threading.Thread(target=self._review_worker, args=(key, session, options), daemon=True).start()
 
     def _review_cap(self):
         """--max-ai-credits for a new review: the configured cap, lowered to what's left of the monthly budget.
@@ -1627,15 +1636,15 @@ class PRReviewerApp(rumps.App):
         caps = [c for c in caps if c]
         return min(caps) if caps else None
 
-    def _review_worker(self, key, session):
+    def _review_worker(self, key, session, options):
+        """options: start()'s model, effort and context."""
         workdir = review_dir(key)
         try:
             token = self.token or gh_token()
             shutil.rmtree(workdir, ignore_errors=True)
             os.makedirs(workdir)
             meta = copilot_review.prepare(key, workdir, clones_dir(), token)
-            proc = copilot_review.start(key, workdir, session, meta["base"],
-                                        model=self.config.get("copilot_model"),
+            proc = copilot_review.start(key, workdir, session, meta["base"], **options,
                                         max_ai_credits=self._review_cap())
         except urllib.error.HTTPError as e:
             AppHelper.callAfter(self._review_failed, key, session, http_error_text(e))
@@ -1865,7 +1874,7 @@ class PRReviewerApp(rumps.App):
             "tokens": credits.get("tokens") or 0,
             # [model, credits]; model ids alone when an older version finished the review
             "models": [m if isinstance(m, str) else [m[0], round(m[1], 3)] for m in credits.get("models") or []],
-            "model": job.get("model"),
+            "model": job.get("model"), "effort": job.get("effort"), "context": job.get("context"),
             "comments": job.get("comments", 0), "must_fix": job.get("must_fix", 0),
         })
 
@@ -2094,6 +2103,12 @@ class PRReviewerApp(rumps.App):
             self.config.pop("copilot_model", None)
         self._save_config()
 
+    def set_review_option(self, name, value):
+        """name: "copilot_effort" or "copilot_context"; value: one of REVIEW_CHOICES[name]."""
+        self._check_config()
+        self.config[name] = value
+        self._save_config()
+
     def set_authors(self, name, text):
         self._check_config()
         self.config[name] = parse_logins(text)
@@ -2202,8 +2217,8 @@ def cli(argv):
             n = len(pr["rounds"])
             print(f'\n{pr["key"]} {pr["title"]}\n  {pr["author"]} · {n} round{"s" if n != 1 else ""} · '
                   f'{pr["credits"]:.1f} AIC' + (f' · {history.tokens_text(pr["tokens"])} tokens' if pr["tokens"] else ""))
-            for i, r in enumerate(pr["rounds"], 1):
-                print(f"  Round {i}: {history.round_text(r)}")
+            for r in pr["rounds"]:
+                print(f'  Round {r["number"]}: {history.round_text(r)}')
         return
 
     if args.command == "list":

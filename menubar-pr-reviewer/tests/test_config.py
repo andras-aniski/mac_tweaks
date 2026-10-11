@@ -31,6 +31,18 @@ def test_review_model(config_path):
         assert "copilot_model" not in m.load_config()  # Copilot's default
 
 
+def test_review_effort_and_context(config_path):
+    config_path.write_text(json.dumps({"repos": []}))
+    config = m.load_config()
+    assert (config["copilot_effort"], config["copilot_context"]) == ("medium", "long_context")  # the defaults
+    config_path.write_text(json.dumps({"repos": [], "copilot_effort": "max", "copilot_context": "default"}))
+    config = m.load_config()
+    assert (config["copilot_effort"], config["copilot_context"]) == ("max", "default")
+    config_path.write_text(json.dumps({"repos": [], "copilot_effort": "huge", "copilot_context": 5}))
+    config = m.load_config()
+    assert (config["copilot_effort"], config["copilot_context"]) == ("medium", "long_context")
+
+
 def test_a_broken_config_is_an_error(config_path):
     config_path.write_text(json.dumps({"repos": [{"owner": "a"}]}))
     with pytest.raises(ValueError):

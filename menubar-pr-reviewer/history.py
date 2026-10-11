@@ -3,7 +3,8 @@
 Events (all have "event", "key" and "at", a Unix time):
 - review: a Copilot review ended. "status" (done, failed or stopped), "started", "title", "author", "credits",
   "agents" ([[label, credits]]), "tokens", "models" ([[model, credits]], the most first; model ids alone in
-  older events), "model" (what it was started with: a model id, "auto", or missing), "comments", "must_fix"
+  older events), "model" (what it was started with: a model id, "auto", or missing), "effort" and "context"
+  (its reasoning effort and context tier, missing in older events), "comments", "must_fix"
 - push: its comments were posted. "posted", "skipped"
 - approve: the PR was approved from the review window
 - discard: the review was discarded
@@ -117,19 +118,22 @@ def with_model(events, model):
     return kept
 
 
-def by_pr(events):
-    """The reviewed PRs, the most recently reviewed first:
-    [{"key", "title", "author", "rounds", "credits", "tokens", "last"}], where each round is a review event with
-    "actions": the push, approve and discard events that followed it."""
+def by_pr(events, since=0):
+    """The PRs reviewed since a time, the most recently reviewed first:
+    [{"key", "title", "author", "rounds", "credits", "tokens", "last"}], where each round is a review event since
+    then with "actions": the push, approve and discard events that followed it, and "number": which round of the
+    PR it was."""
     prs = {}
     for e in sorted(events, key=lambda e: e["at"]):
         pr = prs.setdefault(e["key"], {"key": e["key"], "title": "", "author": "", "rounds": []})
         if e["event"] == "review":
             pr["title"] = e.get("title") or pr["title"]
             pr["author"] = e.get("author") or pr["author"]
-            pr["rounds"].append(dict(e, actions=[]))
+            pr["rounds"].append(dict(e, actions=[], number=len(pr["rounds"]) + 1))
         elif pr["rounds"]:
             pr["rounds"][-1]["actions"].append(e)
+    for pr in prs.values():
+        pr["rounds"] = [r for r in pr["rounds"] if r["at"] >= since]
     reviewed = [pr for pr in prs.values() if pr["rounds"]]
     for pr in reviewed:
         pr["credits"] = sum(r.get("credits") or 0 for r in pr["rounds"])
@@ -149,9 +153,12 @@ def tokens_text(n):
 def round_text(r):
     """One review round, e.g. "9 Oct 10:20 · claude-sonnet-5.5 · 31.7 AIC · 1.2M tokens · 4 comments (1 must-fix) · pushed 3, approved"."""
     parts = [datetime.fromtimestamp(r["at"]).strftime("%-d %b %H:%M")]
-    models = [m for m, _ in review_models(r) if m != "Unknown"]
-    if models:
-        parts.append(", ".join(models))
+    models = ", ".join(m for m, _ in review_models(r) if m != "Unknown")
+    options = [r["effort"]] if r.get("effort") else []
+    if r.get("context"):
+        options.append("long context" if r["context"] == "long_context" else "standard context")
+    if models or options:
+        parts.append(f'{models} ({", ".join(options)})' if models and options else models or ", ".join(options))
     parts.append(f'{r.get("credits") or 0:.1f} AIC')
     if r.get("tokens"):
         parts.append(f'{tokens_text(r["tokens"])} tokens')

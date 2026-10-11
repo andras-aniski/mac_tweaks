@@ -60,6 +60,15 @@ def test_by_pr_and_round_text():
     assert history.round_text(prs[0]["rounds"][0]).endswith("4.2 AIC · stopped")
 
 
+def test_by_pr_since_keeps_the_rounds_in_the_period():
+    prs = history.by_pr(EVENTS, dict(history.periods(NOW))["This week"])
+    assert [pr["key"] for pr in prs] == ["acme/api#3", "acme/web#2"]
+    two = prs[1]
+    assert [r["number"] for r in two["rounds"]] == [2]  # numbered among all of the PR's rounds
+    assert (two["credits"], two["tokens"]) == (15, 4e5)
+    assert history.round_text(two["rounds"][0]).endswith("approved")
+
+
 def test_load_skips_broken_lines(tmp_path):
     path = tmp_path / "history.jsonl"
     history.append(str(path), {"event": "review", "key": "a/b#1", "credits": 1})
@@ -115,14 +124,23 @@ def test_round_text_names_every_model():
     assert " · claude-opus-5.5, claude-haiku-5.5 · 12.0 AIC" in history.round_text(mixed)
 
 
+def test_round_text_has_the_effort_and_context():
+    r = dict(review("acme/web#1", (10, 5), 30, models=[["claude-opus-5.5", 30]], effort="high",
+                    context="long_context"), actions=[])
+    assert " · claude-opus-5.5 (high, long context) · 30.0 AIC" in history.round_text(r)
+    r.update(context="default")
+    assert " · claude-opus-5.5 (high, standard context) · " in history.round_text(r)
+
+
 def test_the_app_logs_credits_per_model(app, monkeypatch):
     logged = []
     monkeypatch.setattr(history, "append", lambda path, event: logged.append(event))
-    job = {"status": "done", "started": 1, "model": "auto",
+    job = {"status": "done", "started": 1, "model": "auto", "effort": "low", "context": "default",
            "credits": {"total": 12.0, "agents": [], "tokens": 0, "models": [("claude-opus-5.5", 8.0001), ("x", 4)]}}
     app._log_review("acme/web#1", job)
     job["credits"]["models"] = ["claude-sonnet-5.5"]  # finished by an older version
     app._log_review("acme/web#1", job)
+    assert (logged[0]["effort"], logged[0]["context"]) == ("low", "default")
     assert [(e["models"], e["model"]) for e in logged] == [
         ([["claude-opus-5.5", 8.0], ["x", 4]], "auto"), (["claude-sonnet-5.5"], "auto")]
     assert history.review_models(dict(logged[1], credits=12.0)) == [("claude-sonnet-5.5", 12.0)]

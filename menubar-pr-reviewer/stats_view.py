@@ -1,10 +1,11 @@
 """The Review statistics window: stat tiles, credits per day, per agent and per model, and the reviewed PRs, for
-every model or one.
+every model or one. Clicking a tile picks the period the agent and model charts cover.
 
 Drawn with AppKit. Colors follow the dataviz reference palette: one series hue (blue, with its own dark-mode
 step), recessive grid and axes in system colors, status colors only for the budget, always with a label.
 """
 import math
+from datetime import datetime
 
 import objc
 from AppKit import (
@@ -17,6 +18,7 @@ from AppKit import (
     NSBezierPath,
     NSButton,
     NSColor,
+    NSCursor,
     NSFont,
     NSFontAttributeName,
     NSFontWeightRegular,
@@ -96,20 +98,43 @@ def _bar(x, y, w, h, radius, top=True):
 
 
 class TileView(NSView):
-    """A stat tile: a label, a number of AI credits, a detail line, and an optional budget bar."""
+    """A stat tile: a label, a number of AI credits, a detail line, and an optional budget bar. Clicking it picks
+    its period; the picked one has an outline."""
 
     @objc.python_method
-    def setup(self, title, credits, detail, budget=None):
+    def setup(self, title, credits, detail, budget=None, selected=False, on_click=None):
         """budget: (fraction used, label, status color or None) or None."""
         self.title, self.credits, self.detail, self.budget = title, credits, detail, budget
+        self.selected, self.on_click = selected, on_click
 
     def isFlipped(self):
         return True
 
+    def resetCursorRects(self):
+        if not self.selected:
+            self.addCursorRect_cursor_(self.bounds(), NSCursor.pointingHandCursor())
+
+    def acceptsFirstMouse_(self, event):
+        return True  # a click picks the period even when the window isn't active
+
+    def mouseDown_(self, event):
+        pass  # mouseUp_ only comes after a handled mouseDown_
+
+    def mouseUp_(self, event):
+        if self.on_click and self.mouse_inRect_(self.convertPoint_fromView_(event.locationInWindow(), None),
+                                                self.bounds()):
+            self.on_click()
+
     def drawRect_(self, rect):
         b = self.bounds()
-        NSColor.labelColor().colorWithAlphaComponent_(0.05).set()
+        NSColor.labelColor().colorWithAlphaComponent_(0.08 if self.selected else 0.05).set()
         NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(b, 8, 8).fill()
+        if self.selected:
+            SERIES.set()
+            outline = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+                NSMakeRect(b.origin.x + 1, b.origin.y + 1, b.size.width - 2, b.size.height - 2), 7, 7)
+            outline.setLineWidth_(2)
+            outline.stroke()
         secondary = NSColor.secondaryLabelColor()
         _text(self.title, 11, secondary).drawAtPoint_(NSMakePoint(12, 10))
         value = _text(f"{self.credits:.1f}", 22, None, NSFontWeightSemibold, digits=True)
@@ -132,14 +157,15 @@ class TileView(NSView):
 
 
 class DailyChartView(NSView):
-    """AI credits per day: one bar per day, three gridlines, a date every week, a tooltip on every day."""
+    """AI credits per day: one bar per day, three gridlines, a date every week, a tooltip on every day. The days
+    before the picked period are dimmed."""
 
     LEFT, RIGHT, TOP, BOTTOM = 44, 6, 8, 22
 
     @objc.python_method
-    def setup(self, days):
-        """days: [(date, AI credits, reviews)], oldest first."""
-        self.days = days
+    def setup(self, days, since=None):
+        """days: [(date, AI credits, reviews)], oldest first. since: the first day of the picked period, or None."""
+        self.days, self.since = days, since
         self.removeAllToolTips()
         plot_w = self.bounds().size.width - self.LEFT - self.RIGHT
         slot = plot_w / len(days)
@@ -171,9 +197,9 @@ class DailyChartView(NSView):
             label.drawAtPoint_(NSMakePoint(self.LEFT - 6 - label.size().width, y - label.size().height / 2))
         slot = plot_w / len(self.days)
         bar_w = max(2, slot * 0.62)
-        SERIES.set()
         for i, (day, credits, _) in enumerate(self.days):
             if credits > 0:
+                (SERIES.colorWithAlphaComponent_(0.3) if self.since and day < self.since else SERIES).set()
                 h = max(2, plot_h * credits / top)
                 _bar(self.LEFT + i * slot + (slot - bar_w) / 2, self.TOP + plot_h - h, bar_w, h, 4)
         last = len(self.days) - 1
@@ -265,6 +291,7 @@ class StatsWindow:
         self.model_popup.setAction_("fire:")
         view.addSubview_(self.model_popup)
         self.model = None  # None: every model
+        self.period = "This month"  # the tile picked: the period of the agent and model charts
         self.data = None
 
     def update(self, events, budget=None, month_spent=None, now=None):
@@ -281,10 +308,15 @@ class StatsWindow:
     def _pick_model(self):
         i = self.model_popup.indexOfSelectedItem()
         self.model = self.model_popup.itemTitleAtIndex_(i) if i > 0 else None
-        self._render()
+        self._render(keep_scroll=True)
 
-    def _render(self):
+    def _pick_period(self, label):
+        self.period = label
+        self._render(keep_scroll=True)
+
+    def _render(self, keep_scroll=False):
         """The statistics of every review, or of the ones that used the picked model."""
+        scrolled = self.scroll.contentView().bounds().origin if keep_scroll else NSMakePoint(0, 0)
         events, budget, month_spent, now = self.data
         if self.model:
             events = history.with_model(events, self.model)
@@ -326,43 +358,47 @@ class StatsWindow:
                     status = CRITICAL if fraction >= 1 else WARNING if fraction >= 0.8 else None
                     word = "⚠︎ Over budget" if fraction >= 1 else f"{fraction:.0%} of {budget:g}"
                     meter = (fraction, ("⚠︎ " if status is WARNING else "") + word, status)
-            tile.setup(label, credits, detail, meter)
+            tile.setup(label, credits, detail, meter, selected=label == self.period,
+                       on_click=lambda label=label: self._pick_period(label))
             doc.addSubview_(tile)
         y += 96 + 28
+
+        since = dict(history.periods(now))[self.period]
 
         # credits per day
         heading("Per day, the last 30 days")
         chart = DailyChartView.alloc().initWithFrame_(NSMakeRect(MARGIN, y, inner, 170))
-        chart.setup(history.daily(events, 30, now))
+        chart.setup(history.daily(events, 30, now), datetime.fromtimestamp(since).date() if since else None)
         add(chart, 170)
 
         # credits per agent
-        heading("This month, by agent")
-        agents = history.by_agent(events, history.periods(now)[2][1])
+        heading(f"{self.period}, by agent")
+        agents = history.by_agent(events, since)
         if agents:
             bars = BarsView.alloc().initWithFrame_(NSMakeRect(0, 0, inner, 10))
             bars.setup(agents)
             add(bars, len(agents) * BarsView.ROW)
         else:
-            add(NSTextField.labelWithString_("No reviews this month."), 18)
+            add(NSTextField.labelWithString_(
+                "No reviews yet." if self.period == "All time" else f"No reviews {self.period.lower()}."), 18)
 
         # credits per model
-        models = history.by_model(events, history.periods(now)[2][1])
+        models = history.by_model(events, since)
         if models and not self.model:
-            heading("This month, by model")
+            heading(f"{self.period}, by model")
             bars = BarsView.alloc().initWithFrame_(NSMakeRect(0, 0, inner, 10))
             bars.setup(models)
             add(bars, len(models) * BarsView.ROW)
 
         # the reviewed PRs
-        prs = history.by_pr(events)
-        heading(f"Reviewed PRs ({len(prs)})")
+        prs = history.by_pr(events, since)
+        heading(f"{self.period}, reviewed PRs ({len(prs)})")
         text = NSTextView.alloc().initWithFrame_(NSMakeRect(MARGIN, y, inner, 100))
         text.setEditable_(False)
         text.setDrawsBackground_(False)
         text.setTextContainerInset_(NSMakeSize(0, 0))
         text.textContainer().setLineFragmentPadding_(0)
-        text.textStorage().setAttributedString_(self._pr_list(prs))
+        text.textStorage().setAttributedString_(self._pr_list(prs, self.period))
         layout = text.layoutManager()
         layout.ensureLayoutForTextContainer_(text.textContainer())
         height = layout.usedRectForTextContainer_(text.textContainer()).size.height + 4
@@ -372,10 +408,10 @@ class StatsWindow:
 
         doc.setFrameSize_(NSMakeSize(WIDTH, y))
         self.scroll.setDocumentView_(doc)
-        doc.scrollPoint_(NSMakePoint(0, 0))
+        doc.scrollPoint_(scrolled)
 
     @staticmethod
-    def _pr_list(prs):
+    def _pr_list(prs, period):
         secondary = NSColor.secondaryLabelColor()
         indented = NSMutableParagraphStyle.alloc().init()
         indented.setFirstLineHeadIndent_(14)
@@ -389,7 +425,8 @@ class StatsWindow:
             out.appendAttributedString_(text)
 
         if not prs:
-            add("No reviews yet. Reviews are logged from when statistics were added.\n", 13, secondary)
+            add("No reviews yet. Reviews are logged from when statistics were added.\n" if period == "All time"
+                else f"No reviews {period.lower()}.\n", 13, secondary)
         for i, pr in enumerate(prs):
             n = len(pr["rounds"])
             add(("\n" if i else "") + f'#{pr["key"].split("#")[1]} {pr["title"]}\n', 13, None, NSFontWeightSemibold)
@@ -398,8 +435,8 @@ class StatsWindow:
             if pr["tokens"]:
                 details.append(f'{history.tokens_text(pr["tokens"])} tokens')
             add(" · ".join(d for d in details if d) + "\n", 11, secondary)
-            for j, r in enumerate(pr["rounds"], 1):
-                add(f"Round {j}: {history.round_text(r)}\n", 12, None, NSFontWeightRegular, indented)
+            for r in pr["rounds"]:
+                add(f'Round {r["number"]}: {history.round_text(r)}\n', 12, None, NSFontWeightRegular, indented)
         return out
 
     def show(self):
