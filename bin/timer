@@ -1,0 +1,3 @@
+#!/bin/sh
+# Starts menubar-timer in the background.
+exec "$(dirname "$(realpath "$0")")/../scripts/launch.sh" menubar-timer timer.py "$@"

@@ -1,0 +1,3 @@
+#!/bin/sh
+# Starts menubar-pr-idle in the background, or runs its command line when given arguments.
+exec "$(dirname "$(realpath "$0")")/../scripts/launch.sh" menubar-pr-idle pr_idle.py "$@"
