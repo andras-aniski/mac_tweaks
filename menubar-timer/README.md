@@ -6,7 +6,12 @@ Countdown timer in the macOS menu bar (built with [rumps](https://github.com/jar
 |---|---|---|
 | <img src="screenshots/idle.png" width="47" alt="Idle"> | <img src="screenshots/running.png" width="65" alt="Counting down"> | <img src="screenshots/menu.png" width="130" alt="Menu"> |
 
-When time is up, it plays a sound and shows a notification.
+## Features
+
+- **Presets**: 5, 10, 15 or 25 minutes. Pick one in the menu; the time left counts down in the menu bar.
+- **Custom time**: any number of minutes, decimals allowed (e.g. `1.5`). Click **Custom…**.
+- **Time's up**: plays a sound and shows a notification.
+- **Stop**: cancels the countdown. Picking a time while one runs starts over with the new time.
 
 ## Setup
 

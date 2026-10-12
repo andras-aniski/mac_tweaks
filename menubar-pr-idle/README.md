@@ -8,6 +8,15 @@ Tracks the open pull requests of GitHub repos from the macOS menu bar (built wit
 
 <img src="screenshots/menu.png" width="617" alt="Menu">
 
+## Features
+
+- **Tracked repos**: **Track repo…** pre-fills a repo URL from the clipboard; any github.com page in the repo works. Remove one with **Stop tracking** in its submenu.
+- **Needs attention**: flags open PRs that had no commits, comments or reviews for a while (24 hours by default); the hourglass turns orange with a count. Change the time with **Needs attention after…**. See [Needs attention](#needs-attention).
+- **Attention list**: the flagged PRs of all repos at the top of the menu, most idle first. Click one to open it in the browser.
+- **Repo view**: a submenu per repo with all its open PRs, each with how long it has been idle and open, and its author.
+- **Notifications**: when a PR needs attention.
+- **Command line**: add and remove repos, and set the time, from the terminal, also while the app runs.
+
 ## Needs attention
 
 An open, non-draft PR needs attention when it had no activity for longer than the threshold (24 hours by default). Activity is any of:

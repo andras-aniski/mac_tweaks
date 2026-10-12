@@ -8,6 +8,16 @@ Watches GitHub pull requests from the macOS menu bar (built with [rumps](https:/
 
 <img src="screenshots/menu.png" width="432" alt="Menu">
 
+## Features
+
+- **PR LEDs**: one LED per watched PR in the menu bar; its colour says whether the PR has conflicts or failing checks, open review threads, is waiting, ready to merge, merged or closed. See [States](#states).
+- **Watchlist**: **Add PR…** pre-fills a PR URL from the clipboard. **Remove** drops one PR, **Remove merged/closed** all finished ones at once.
+- **Labels**: a short name next to each LED, e.g. `auth`. Type it after the URL when adding the PR, change it with **Rename**. Turn off **Show labels** for dots only.
+- **PR details**: the menu lists each PR with its title, and its state on a second line. Click it to open the PR in the browser.
+- **Notifications**: when a PR changes state, and when it gets a new unresolved review thread.
+- **Refresh**: checked every 60 seconds; **Refresh now** checks right away.
+- **Command line**: add, remove and list PRs from the terminal, also while the app runs, so Claude or a script can add PRs.
+
 ## States
 
 Checked in this order; the first match wins.
