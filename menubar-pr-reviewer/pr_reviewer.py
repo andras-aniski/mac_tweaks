@@ -1,4 +1,5 @@
 import argparse
+import fcntl
 import json
 import math
 import os
@@ -954,6 +955,19 @@ def state_path():
     return os.path.join(os.path.dirname(CONFIG_PATH), "state.json")
 
 
+def lock_instance():
+    """Hold the config folder's lock while the app runs; None if another instance holds it.
+    Two instances would start the same automatic reviews in the same folder and delete each other's results."""
+    os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+    f = open(os.path.join(os.path.dirname(CONFIG_PATH), "instance.lock"), "w")
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        f.close()
+        return None
+    return f  # the lock lasts as long as the file stays open
+
+
 def review_dir(key):
     """Where a Copilot review keeps the PR's context, its checkout and its result."""
     return os.path.join(os.path.dirname(CONFIG_PATH), "reviews", re.sub(r"[/#]", "__", key))
@@ -1722,7 +1736,12 @@ class PRReviewerApp(rumps.App):
                     copilot_review.approve(key, job["head"], token)
                     AppHelper.callAfter(self._approved, key, 0, True)
                     return
-                result = copilot_review.read_result(review_dir(key))
+                try:
+                    result = copilot_review.read_result(review_dir(key))
+                except Exception as e:
+                    AppHelper.callAfter(self._auto_failed, key, action, str(e))
+                    AppHelper.callAfter(self._result_lost, key, job["session"], str(e), False)
+                    return
                 fresh, skipped, summary = copilot_review.to_push(key, result["comments"], token, result["summary"])
                 if fresh or summary:
                     copilot_review.push(key, review_dir(key), job["head"], fresh, token, summary)
@@ -1804,6 +1823,10 @@ class PRReviewerApp(rumps.App):
         def worker():
             try:
                 result = copilot_review.read_result(review_dir(key))
+            except Exception as e:
+                AppHelper.callAfter(self._result_lost, key, session, str(e))
+                return
+            try:
                 fresh, skipped, summary = copilot_review.to_push(key, result["comments"], self.token or gh_token(),
                                                                  result["summary"])
             except Exception as e:
@@ -1812,6 +1835,17 @@ class PRReviewerApp(rumps.App):
             AppHelper.callAfter(self._show_review, key, session, result, fresh, skipped, summary)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _result_lost(self, key, session, error, ask=True):
+        """A finished review whose result can't be read is a failed one: offer to retry it."""
+        job = self.state["reviews"].get(key)
+        if not job or job["session"] != session:
+            return
+        job.update(status="failed", error=error)
+        self._save_state()
+        self._render()
+        if ask:
+            self._review_dialog(key)
 
     def _show_review(self, key, session, result, fresh, skipped, summary):
         job = self.state["reviews"].get(key)
@@ -2273,4 +2307,8 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         cli(sys.argv[1:])
     else:
+        lock = lock_instance()
+        if lock is None:
+            notify("PR Reviewer is already running", "Quit it before starting another one.")
+            sys.exit("menubar-pr-reviewer is already running")
         PRReviewerApp().run()

@@ -319,6 +319,8 @@ def alive(pid):
 
 def read_result(workdir):
     """Copilot's comments: {"summary": str, "comments": [{"path", "line", "body", "source"}]}; raises if missing."""
+    if not os.path.isdir(workdir):
+        raise RuntimeError(f"The review's files are gone: {workdir}")
     try:
         with open(os.path.join(workdir, "result.json")) as f:
             result = json.load(f)

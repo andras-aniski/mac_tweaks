@@ -151,7 +151,7 @@ Setup: install Copilot CLI (`brew install copilot-cli`) and sign in once with `c
 
 - `"copilot_max_ai_credits"`: a cap per review (at least 30), passed as `--max-ai-credits`. With a monthly budget, the lower of the two applies.
 
-Reviews keep running when the app quits, and the app picks them up when it starts again.
+Reviews keep running when the app quits, and the app picks them up when it starts again. Only one instance runs at a time: a second one quits with a notification, since both would start the same automatic reviews and delete each other's results. A finished review whose files are gone shows as **Review failed**.
 
 ## Statistics
 
