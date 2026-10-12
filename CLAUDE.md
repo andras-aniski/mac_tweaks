@@ -8,6 +8,8 @@ Personal macOS menu bar tools, one folder per tool, each built with [rumps](http
 - The root `README.md` links every tool with a one-line description.
 - A tool's `README.md` has a `## Features` list right after its intro and screenshots: one bullet per feature, with its name, what it does and how to use it, in plain words. Only what's worth knowing, not every detail. Update it in the same change as the feature, without being asked.
 - Screenshots are Retina 2x PNGs, shown in READMEs at half their pixel width.
+- A code block in a README holds only what to paste and run, so GitHub's copy button copies a working command: no comments or alternatives inside it. Explain in the text around it, and give an alternative its own block.
+- Each tool's `## Run` gives the detached start as one line, `nohup .venv/bin/python <script>.py >/dev/null 2>&1 & disown`, and links to menubar-pr-watchlist's README for the explanation.
 
 ## Git
 

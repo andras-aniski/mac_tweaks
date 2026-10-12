@@ -221,7 +221,7 @@ The logic is covered by tests: which group a PR is in and when it moves, automat
 To keep it running after the terminal is closed, start it with `nohup` as described in [menubar-pr-watchlist](../menubar-pr-watchlist/README.md#run-without-keeping-a-terminal-open):
 
 ```sh
-nohup .venv/bin/python pr_reviewer.py >/tmp/pr-reviewer.log 2>&1 &
+nohup .venv/bin/python pr_reviewer.py >/dev/null 2>&1 & disown
 ```
 
 Stop it with **Quit** in its menu.

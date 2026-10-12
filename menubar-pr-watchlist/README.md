@@ -74,19 +74,14 @@ python3 -m venv .venv
 
 ### Run without keeping a terminal open
 
-Start it detached from the terminal (it keeps running after the terminal is closed, but not after a restart):
+Start it detached from the terminal. It keeps running after the terminal is closed, but not after a restart:
 
 ```sh
-# log output to /tmp/pr-watchlist.log
-nohup .venv/bin/python pr_watchlist.py >/tmp/pr-watchlist.log 2>&1 &
-
-# or discard output, and also drop it from the shell's job list
-nohup .venv/bin/python pr_watchlist.py >/dev/null 2>&1 &
-disown
+nohup .venv/bin/python pr_watchlist.py >/dev/null 2>&1 & disown
 ```
 
 - `nohup` makes the app ignore the hang-up signal the terminal sends when it closes.
-- `>file 2>&1` sends normal output and error output to the file (`/dev/null` discards it).
-- `&` runs it in the background, and `disown` removes it from the shell's job list.
+- `>/dev/null 2>&1` discards normal output and error output. The running app prints nothing but errors; to see them, run it in the foreground as above.
+- `&` runs it in the background, and `disown` removes it from the shell's job list, so the shell doesn't warn about a running job when it closes.
 
 Stop it with **Quit** in its menu.
