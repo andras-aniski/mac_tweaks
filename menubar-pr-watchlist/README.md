@@ -1,4 +1,4 @@
-# menubar-pr
+# menubar-pr-watchlist
 
 Watches GitHub pull requests from the macOS menu bar (built with [rumps](https://github.com/jaredks/rumps)). A single menu bar item shows one LED per PR.
 
@@ -28,7 +28,7 @@ A notification is shown whenever a PR changes state, and when a PR gets a new un
 
 - Polls every 60 s. All watched PRs are fetched in one GraphQL request. The menu shows when the next refresh is due.
 - The token comes from the GitHub CLI (`gh auth token`), so run `gh auth login` once. The token is never stored.
-- The watchlist lives in `~/Library/Application Support/menubar-pr/config.json`. The app reloads it within a second when it changes on disk.
+- The watchlist lives in `~/Library/Application Support/menubar-pr-watchlist/config.json`. The app reloads it within a second when it changes on disk.
 
 ## Usage
 
@@ -41,10 +41,10 @@ A notification is shown whenever a PR changes state, and when a PR gets a new un
 Edits the watchlist, also while the app is running (so Claude or a script can add PRs):
 
 ```sh
-.venv/bin/python pr_watch.py add https://github.com/owner/repo/pull/123 auth   # label is optional
-.venv/bin/python pr_watch.py remove owner/repo#123 "other label"               # by URL, owner/repo#123 or label
-.venv/bin/python pr_watch.py list
-.venv/bin/python pr_watch.py help                                              # every command and its parameters
+.venv/bin/python pr_watchlist.py add https://github.com/owner/repo/pull/123 auth   # label is optional
+.venv/bin/python pr_watchlist.py remove owner/repo#123 "other label"               # by URL, owner/repo#123 or label
+.venv/bin/python pr_watchlist.py list
+.venv/bin/python pr_watchlist.py help                                              # every command and its parameters
 ```
 
 ## Setup
@@ -59,7 +59,7 @@ python3 -m venv .venv
 ## Run
 
 ```sh
-.venv/bin/python pr_watch.py
+.venv/bin/python pr_watchlist.py
 ```
 
 ### Run without keeping a terminal open
@@ -67,11 +67,11 @@ python3 -m venv .venv
 Start it detached from the terminal (it keeps running after the terminal is closed, but not after a restart):
 
 ```sh
-# log output to /tmp/pr-watch.log
-nohup .venv/bin/python pr_watch.py >/tmp/pr-watch.log 2>&1 &
+# log output to /tmp/pr-watchlist.log
+nohup .venv/bin/python pr_watchlist.py >/tmp/pr-watchlist.log 2>&1 &
 
 # or discard output, and also drop it from the shell's job list
-nohup .venv/bin/python pr_watch.py >/dev/null 2>&1 &
+nohup .venv/bin/python pr_watchlist.py >/dev/null 2>&1 &
 disown
 ```
 

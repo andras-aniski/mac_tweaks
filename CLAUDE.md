@@ -11,13 +11,13 @@ Personal macOS menu bar tools, one folder per tool, each built with [rumps](http
 
 ## Git
 
-- One commit per tool (e.g. `Add menubar-pr`), with short messages.
+- One commit per tool (e.g. `Add menubar-pr-watchlist`), with short messages.
 - While polishing a tool, amend its commit and `git push --force-with-lease` instead of adding commits.
 
 ## Testing a menu bar app
 
 - Logic (rules, parsing, state changes) gets pytest tests in `<tool>/tests/`, on scratch folders with the network stubbed; `pytest` goes in the tool's `requirements-dev.txt`. See `menubar-pr-reviewer/tests/`. Run them before committing, and when fixing a logic bug, add a test that fails without the fix. Menus and windows are checked by hand, as below.
-- The user may be running their own instance. Check first with `ps -axo pid,lstart,command | grep "[p]r_watch"` (or the tool's script name).
+- The user may be running their own instance. Check first with `ps -axo pid,lstart,command | grep "[p]r_watchlist"` (or the tool's script name).
 - Never write test data to a tool's real config in `~/Library/Application Support/<tool>/`. Point the module's `CONFIG_PATH` at a scratch file instead.
 - When driving the menu with System Events, target the test instance by PID (`first process whose unix id is <pid>`). `process "Python"` can match the user's instance.
 - System Events can't address a status item whose title has an image attachment, and can't reach buttons inside menu rows. Use the accessibility API from a scratch venv with `pyobjc-framework-ApplicationServices`: `AXUIElementCreateApplication(pid)` → `AXExtrasMenuBar` → the item; `AXPress` it to open or close the menu, then find buttons and checkboxes in the rows and windows by `AXRole` and `AXTitle`.
@@ -38,7 +38,7 @@ menubar-timer/.venv/bin/python scripts/shoot.py menubar-timer timer:TimerApp men
 menubar-timer/.venv/bin/python scripts/shoot.py menubar-timer timer:TimerApp menubar-timer/screenshots/running.png --exec "app.start(25)" --wait 3
 
 # --setup runs before the app is created (`m` is the module): keep test data out of the real config
-menubar-pr/.venv/bin/python scripts/shoot.py menubar-pr pr_watch:PRWatchApp menubar-pr/screenshots/menu.png \
+menubar-pr-watchlist/.venv/bin/python scripts/shoot.py menubar-pr-watchlist pr_watchlist:PRWatchlistApp menubar-pr-watchlist/screenshots/menu.png \
     --setup "m.CONFIG_PATH='<scratchpad>/test-config.json'" --wait 6 --menu
 ```
 

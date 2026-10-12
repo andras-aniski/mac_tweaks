@@ -46,7 +46,7 @@ DEFAULT_ATTENTION_HOURS = 24
 MAX_LISTED = 15  # PRs needing attention shown at the top of the menu; the rest are in the repo submenus
 API_URL = "https://api.github.com/graphql"
 REPO_RE = re.compile(r"^(?:https?://github\.com/)?([\w.-]+)/([\w.-]+?)(?:\.git)?(?:[/?#]\S*)?$")
-CONFIG_PATH = os.path.join(rumps.application_support("menubar-pr-lifetime"), "config.json")
+CONFIG_PATH = os.path.join(rumps.application_support("menubar-pr-idle"), "config.json")
 
 ORANGE = (1.00, 0.58, 0.00)
 GRAY = (0.56, 0.56, 0.58)
@@ -304,9 +304,9 @@ def config_mtime():
 
 # --- App ---------------------------------------------------------------------
 
-class PRLifetimeApp(rumps.App):
+class PRIdleApp(rumps.App):
     def __init__(self):
-        super().__init__("PR Lifetime", title="", quit_button=None)
+        super().__init__("PR Idle", title="", quit_button=None)
         # Menu bar only: no Dock icon.
         NSApplication.sharedApplication().setActivationPolicy_(NSApplicationActivationPolicyAccessory)
         try:
@@ -346,7 +346,7 @@ class PRLifetimeApp(rumps.App):
         self.config_mtime = config_mtime()
 
     def _check_config(self):
-        """Pick up edits made outside the app, e.g. by `pr_lifetime.py add`."""
+        """Pick up edits made outside the app, e.g. by `pr_idle.py add`."""
         mtime = config_mtime()
         if mtime == self.config_mtime:
             return
@@ -666,7 +666,7 @@ class PRLifetimeApp(rumps.App):
 
 def cli(argv):
     parser = argparse.ArgumentParser(
-        prog="pr_lifetime",
+        prog="pr_idle",
         description="Tracks the open PRs of GitHub repos from the macOS menu bar. Run without a command to start "
         "the app; the commands edit its config, and a running app picks up changes within a second.",
         epilog=f"Config: {CONFIG_PATH}",
@@ -675,21 +675,21 @@ def cli(argv):
     add = commands.add_parser(
         "add", help="track a repo",
         description="Track a repo's open, non-draft PRs. Adding a repo that is already tracked does nothing.",
-        epilog="examples:\n  pr_lifetime add https://github.com/owner/repo\n  pr_lifetime add owner/repo",
+        epilog="examples:\n  pr_idle add https://github.com/owner/repo\n  pr_idle add owner/repo",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     add.add_argument("repo", metavar="REPO", help="repo URL or owner/repo")
     remove = commands.add_parser(
         "remove", help="stop tracking repos",
         description="Stop tracking one or more repos.\nExits with status 1 if any of them isn't tracked.",
-        epilog="example:\n  pr_lifetime remove owner/repo other/repo",
+        epilog="example:\n  pr_idle remove owner/repo other/repo",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     remove.add_argument("repo", nargs="+", metavar="REPO", help="repo URL or owner/repo")
     hours = commands.add_parser(
         "hours", help="show or set the attention threshold",
         description="PRs need attention after this many hours without a commit, comment or review.",
-        epilog="examples:\n  pr_lifetime hours\n  pr_lifetime hours 48",
+        epilog="examples:\n  pr_idle hours\n  pr_idle hours 48",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     hours.add_argument("hours", nargs="?", type=float, metavar="HOURS", help="new threshold (default: show it)")
@@ -757,4 +757,4 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         cli(sys.argv[1:])
     else:
-        PRLifetimeApp().run()
+        PRIdleApp().run()

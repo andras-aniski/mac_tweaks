@@ -34,7 +34,7 @@ from PyObjCTools import AppHelper
 POLL_SECONDS = 60
 API_URL = "https://api.github.com/graphql"
 PR_RE = re.compile(r"(?:https?://github\.com/)?([\w.-]+)/([\w.-]+)(?:/pull/|#)(\d+)(?:[/?#]\S*)?")
-CONFIG_PATH = os.path.join(rumps.application_support("menubar-pr"), "config.json")
+CONFIG_PATH = os.path.join(rumps.application_support("menubar-pr-watchlist"), "config.json")
 
 RED = (1.00, 0.23, 0.19)
 YELLOW = (1.00, 0.76, 0.03)
@@ -233,9 +233,9 @@ def config_mtime():
 
 # --- App ---------------------------------------------------------------------
 
-class PRWatchApp(rumps.App):
+class PRWatchlistApp(rumps.App):
     def __init__(self):
-        super().__init__("PR Watch", title="PRs", quit_button=None)
+        super().__init__("PR Watchlist", title="PRs", quit_button=None)
         # Menu bar only: no Dock icon.
         NSApplication.sharedApplication().setActivationPolicy_(NSApplicationActivationPolicyAccessory)
         try:
@@ -272,7 +272,7 @@ class PRWatchApp(rumps.App):
         self.config_mtime = config_mtime()
 
     def _check_config(self):
-        """Pick up edits made outside the app, e.g. by `pr_watch.py add`."""
+        """Pick up edits made outside the app, e.g. by `pr_watchlist.py add`."""
         mtime = config_mtime()
         if mtime == self.config_mtime:
             return
@@ -530,7 +530,7 @@ class PRWatchApp(rumps.App):
 
 def cli(argv):
     parser = argparse.ArgumentParser(
-        prog="pr_watch",
+        prog="pr_watchlist",
         description="Watches GitHub PRs from the macOS menu bar. Run without a command to start the app; "
         "the commands edit its watchlist, and a running app picks up changes within a second.",
         epilog=f"Watchlist: {CONFIG_PATH}",
@@ -540,7 +540,7 @@ def cli(argv):
         "add", help="watch a PR",
         description="Watch a PR. The label is shown next to its LED; without one, #<number> is used.\n"
         "Adding a PR that is already watched does nothing.",
-        epilog="examples:\n  pr_watch add https://github.com/owner/repo/pull/123 auth\n  pr_watch add owner/repo#123",
+        epilog="examples:\n  pr_watchlist add https://github.com/owner/repo/pull/123 auth\n  pr_watchlist add owner/repo#123",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     add.add_argument("pr", metavar="PR", help="PR URL or owner/repo#123")
@@ -548,7 +548,7 @@ def cli(argv):
     remove = commands.add_parser(
         "remove", help="stop watching PRs",
         description="Stop watching one or more PRs.\nExits with status 1 if any of them isn't watched.",
-        epilog='examples:\n  pr_watch remove owner/repo#123\n  pr_watch remove auth "other label"',
+        epilog='examples:\n  pr_watchlist remove owner/repo#123\n  pr_watchlist remove auth "other label"',
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     remove.add_argument("pr", nargs="+", metavar="PR",
@@ -609,4 +609,4 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         cli(sys.argv[1:])
     else:
-        PRWatchApp().run()
+        PRWatchlistApp().run()

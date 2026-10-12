@@ -1,4 +1,4 @@
-# menubar-pr-lifetime
+# menubar-pr-idle
 
 Tracks the open pull requests of GitHub repos from the macOS menu bar (built with [rumps](https://github.com/jaredks/rumps)) and flags the ones nobody has touched for a while. The menu bar item stays a plain hourglass until a PR needs attention.
 
@@ -28,7 +28,7 @@ A notification is shown when a PR crosses the threshold, or several at once. PRs
 - Polls every hour (every 5 minutes after an error). Each repo is one GraphQL request per 50 open PRs. The menu shows when the next refresh is due.
 - New PRs show up and merged/closed ones drop out on the next refresh; drafts are skipped until they're marked ready.
 - The token comes from the GitHub CLI (`gh auth token`), so run `gh auth login` once. The token is never stored.
-- The config lives in `~/Library/Application Support/menubar-pr-lifetime/config.json`. The app reloads it within a second when it changes on disk.
+- The config lives in `~/Library/Application Support/menubar-pr-idle/config.json`. The app reloads it within a second when it changes on disk.
 
 ## Usage
 
@@ -42,11 +42,11 @@ A notification is shown when a PR crosses the threshold, or several at once. PRs
 Edits the config, also while the app is running:
 
 ```sh
-.venv/bin/python pr_lifetime.py add https://github.com/owner/repo  # or owner/repo
-.venv/bin/python pr_lifetime.py remove owner/repo other/repo
-.venv/bin/python pr_lifetime.py hours 48                           # without a number: show the threshold
-.venv/bin/python pr_lifetime.py list
-.venv/bin/python pr_lifetime.py help                               # every command and its parameters
+.venv/bin/python pr_idle.py add https://github.com/owner/repo  # or owner/repo
+.venv/bin/python pr_idle.py remove owner/repo other/repo
+.venv/bin/python pr_idle.py hours 48                           # without a number: show the threshold
+.venv/bin/python pr_idle.py list
+.venv/bin/python pr_idle.py help                               # every command and its parameters
 ```
 
 ## Setup
@@ -61,13 +61,13 @@ python3 -m venv .venv
 ## Run
 
 ```sh
-.venv/bin/python pr_lifetime.py
+.venv/bin/python pr_idle.py
 ```
 
-To keep it running after the terminal is closed, start it with `nohup` as described in [menubar-pr](../menubar-pr/README.md#run-without-keeping-a-terminal-open):
+To keep it running after the terminal is closed, start it with `nohup` as described in [menubar-pr-watchlist](../menubar-pr-watchlist/README.md#run-without-keeping-a-terminal-open):
 
 ```sh
-nohup .venv/bin/python pr_lifetime.py >/tmp/pr-lifetime.log 2>&1 &
+nohup .venv/bin/python pr_idle.py >/tmp/pr-idle.log 2>&1 &
 ```
 
 Stop it with **Quit** in its menu.
