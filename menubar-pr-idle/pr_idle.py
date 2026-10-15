@@ -1,5 +1,6 @@
 import argparse
 import json
+import math
 import os
 import re
 import shutil
@@ -16,6 +17,8 @@ from functools import partial
 import objc
 import rumps
 from AppKit import (
+    NSAlert,
+    NSAlertFirstButtonReturn,
     NSApplication,
     NSApplicationActivationPolicyAccessory,
     NSAttributedString,
@@ -57,6 +60,8 @@ from PyObjCTools import AppHelper
 POLL_SECONDS = 3600
 RETRY_SECONDS = 300
 DEFAULT_ATTENTION_HOURS = 24
+DEFAULT_ATTENTION_DAYS = 5
+FLAG_BY = ("idle", "age")  # what makes a PR need attention: time without activity, or time since ready for review
 MAX_LISTED = 15  # PRs needing attention shown at the top of the menu; the rest are in the repo submenus
 API_URL = "https://api.github.com/graphql"
 REPO_RE = re.compile(r"^(?:https?://github\.com/)?([\w.-]+)/([\w.-]+?)(?:\.git)?(?:[/?#]\S*)?$")
@@ -80,6 +85,9 @@ query($owner: String!, $name: String!, $after: String) {
         reviews(last: 10) { nodes { submittedAt author { __typename } } }
         timelineItems(last: 1, itemTypes: [HEAD_REF_FORCE_PUSHED_EVENT, READY_FOR_REVIEW_EVENT]) {
           nodes { ... on HeadRefForcePushedEvent { createdAt } ... on ReadyForReviewEvent { createdAt } }
+        }
+        ready: timelineItems(last: 1, itemTypes: [READY_FOR_REVIEW_EVENT]) {
+          nodes { ... on ReadyForReviewEvent { createdAt } }
         }
       }
     }
@@ -191,12 +199,14 @@ def summarize(pr):
     times += [c["createdAt"] for c in pr["comments"]["nodes"] if human(c)]
     times += [r["submittedAt"] for r in pr["reviews"]["nodes"] if r["submittedAt"] and human(r)]
     times += [e["createdAt"] for e in pr["timelineItems"]["nodes"] if e]
+    # up for review since it was opened as a non-draft, or last marked ready
+    ready = [pr["createdAt"]] + [e["createdAt"] for e in pr["ready"]["nodes"] if e]
     return {
         "number": pr["number"],
         "title": pr["title"],
         "url": pr["url"],
         "author": (pr["author"] or {}).get("login", "ghost"),
-        "opened": parse_time(pr["createdAt"]),
+        "ready": max(parse_time(t) for t in ready),
         "active": max(parse_time(t) for t in times),
     }
 
@@ -238,12 +248,13 @@ def short(title):
     return title if len(title) <= 60 else title[:59] + "…"
 
 
-def pr_row_lines(idle, opened, title, detail, highlight, selected=False):
-    """The two lines of a PR row, with the idle and open times in columns up front and their labels below them:
+def pr_row_lines(idle, age, title, detail, by, flagged, selected=False):
+    """The two lines of a PR row, with the idle time and age in columns up front and their labels below them:
 
         6d 23h   12d   #123 Title
-        idle     open  owner/repo · author
+        idle     age   owner/repo · author
 
+    The column PRs are flagged by (FLAG_BY) is bold, and orange once the PR needs attention.
     selected: in the menu's selection colour, for the hovered row.
     """
     size = NSFont.menuFontOfSize_(0).pointSize()
@@ -257,9 +268,12 @@ def pr_row_lines(idle, opened, title, detail, highlight, selected=False):
     ])
     style.setLineBreakMode_(NSLineBreakByTruncatingTail)
     primary, secondary = NSColor.labelColor(), NSColor.secondaryLabelColor()
-    idle_color = NSColor.colorWithSRGBRed_green_blue_alpha_(*ORANGE, 1.0) if highlight else primary
+    flag_color = NSColor.colorWithSRGBRed_green_blue_alpha_(*ORANGE, 1.0) if flagged else primary
     if selected:
-        primary = secondary = idle_color = NSColor.selectedMenuItemTextColor()
+        primary = secondary = flag_color = NSColor.selectedMenuItemTextColor()
+
+    def column(text, name):
+        return (text, bold, flag_color) if by == name else (text, digits, primary)
 
     def line(parts):
         text = NSMutableAttributedString.alloc().init()
@@ -270,8 +284,8 @@ def pr_row_lines(idle, opened, title, detail, highlight, selected=False):
         return text
 
     return (
-        line([(idle, bold, idle_color), ("\t" + opened, digits, primary), ("\t" + title, NSFont.menuFontOfSize_(0), primary)]),
-        line([("idle\topen\t" + detail, small, secondary)]),
+        line([column(idle, "idle"), column("\t" + age, "age"), ("\t" + title, NSFont.menuFontOfSize_(0), primary)]),
+        line([("idle\tage\t" + detail, small, secondary)]),
     )
 
 
@@ -326,11 +340,11 @@ class PRRowView(NSView):
         ))
 
     @objc.python_method
-    def fill(self, idle, opened, title, detail, highlight):
-        parts = (idle, opened, title, detail, highlight)
+    def fill(self, idle, age, title, detail, by, flagged):
+        parts = (idle, age, title, detail, by, flagged)
         if parts != self.parts:
             self.parts = parts
-            self.led.setImage_(led_image(ORANGE if highlight else GRAY))
+            self.led.setImage_(led_image(ORANGE if flagged else GRAY))
             self._color_text()
 
     @objc.python_method
@@ -398,6 +412,50 @@ def pr_row_item(key, on_open, on_ignore):
     return item
 
 
+def ask_thresholds(hours, days):
+    """Both attention thresholds in one dialog: (hours text, days text) as typed, or None if cancelled."""
+    alert = NSAlert.alloc().init()
+    alert.setMessageText_("Needs attention after")
+    alert.setInformativeText_(
+        "Idle time: hours without a commit, comment or review.\n"
+        "Age: days since the PR was ready for review.\n"
+        "Flag by picks which one applies."
+    )
+    alert.addButtonWithTitle_("Save")
+    alert.addButtonWithTitle_("Cancel")
+    view = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, 220, 56))
+    fields = []
+    for y, label, value, unit in ((32, "Idle time", hours, "hours"), (2, "Age", days, "days")):
+        for text, x, width in ((label, 0, 70), (unit, 152, 60)):
+            text_label = NSTextField.labelWithString_(text)
+            text_label.setFrame_(NSMakeRect(x, y + 3, width, 17))
+            view.addSubview_(text_label)
+        field = NSTextField.alloc().initWithFrame_(NSMakeRect(74, y, 72, 22))
+        field.setStringValue_(f"{value:g}")
+        view.addSubview_(field)
+        fields.append(field)
+    fields[0].setNextKeyView_(fields[1])
+    fields[1].setNextKeyView_(fields[0])
+    alert.setAccessoryView_(view)
+    alert.layout()
+    alert.window().setInitialFirstResponder_(fields[0])
+    NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+    if alert.runModal() != NSAlertFirstButtonReturn:
+        return None
+    return fields[0].stringValue(), fields[1].stringValue()
+
+
+def parse_threshold(text):
+    """A positive number of hours or days, an int when whole; None if the text isn't one."""
+    try:
+        value = float(text.strip())
+    except ValueError:
+        return None
+    if not (value > 0 and math.isfinite(value)):
+        return None
+    return int(value) if value.is_integer() else value
+
+
 def notify(title, message):
     subprocess.Popen([
         "osascript",
@@ -425,6 +483,11 @@ def load_config():
     hours = config.get("attention_hours")
     if isinstance(hours, bool) or not isinstance(hours, (int, float)) or hours <= 0:
         config["attention_hours"] = DEFAULT_ATTENTION_HOURS
+    days = config.get("attention_days")
+    if isinstance(days, bool) or not isinstance(days, (int, float)) or days <= 0:
+        config["attention_days"] = DEFAULT_ATTENTION_DAYS
+    if config.get("attention_by") not in FLAG_BY:
+        config["attention_by"] = "idle"
     ignored = config.get("ignored")  # "owner/repo#123"
     if not (isinstance(ignored, list) and all(isinstance(k, str) for k in ignored)):
         config["ignored"] = []
@@ -456,10 +519,11 @@ class PRIdleApp(rumps.App):
         try:
             self.config = load_config()
         except ValueError:
-            self.config = {"repos": [], "attention_hours": DEFAULT_ATTENTION_HOURS, "ignored": []}
+            self.config = {"repos": [], "attention_hours": DEFAULT_ATTENTION_HOURS,
+                           "attention_days": DEFAULT_ATTENTION_DAYS, "attention_by": "idle", "ignored": []}
         self.config_mtime = config_mtime()
         self.info = {}  # repo key -> {"prs": [summarize() dicts, most idle first]} or {"error": text}
-        self.attention = set()  # "owner/repo#123" of PRs idle for longer than attention_hours
+        self.attention = set()  # "owner/repo#123" of PRs over the threshold: see _flagged_keys()
         self.token = None
         self.busy = False
         self.error = None
@@ -500,14 +564,14 @@ class PRIdleApp(rumps.App):
         except ValueError:
             return  # broken hand edit: keep what we have
         before = {repo_key(r) for r in self.repos}
-        hours_before, ignored_before = self.config["attention_hours"], self.config["ignored"]
+        flagging = self._flagging()
         self.config = config
         keys = {repo_key(r) for r in self.repos}
         self.info = {k: v for k, v in self.info.items() if k in keys}
         if keys - before:
             self.next_poll_at = 0  # fetch new repos on the next tick
-        if self.config["attention_hours"] != hours_before or self.config["ignored"] != ignored_before:
-            self.attention = self._idle_keys()  # no notifications for a new threshold, or PRs no longer ignored
+        if self._flagging() != flagging:
+            self.attention = self._flagged_keys()  # no notifications for a new setting, or PRs no longer ignored
         self._update_attention()
         self._render()
 
@@ -568,29 +632,42 @@ class PRIdleApp(rumps.App):
 
     # attention
 
+    def _since(self, pr):
+        """Since when the PR counts toward attention: its last activity, or when it was ready for review."""
+        return pr["active"] if self.config["attention_by"] == "idle" else pr["ready"]
+
+    def _flagging(self):
+        """The settings that decide which PRs need attention."""
+        return tuple(self.config[k] for k in ("attention_by", "attention_hours", "attention_days", "ignored"))
+
     def _open_prs(self):
-        """Every open PR of the tracked repos, keyed by "owner/repo#123", most idle first."""
+        """Every open PR of the tracked repos, keyed by "owner/repo#123", most idle (or oldest) first."""
         prs = [(f'{k}#{pr["number"]}', pr) for k, info in self.info.items() for pr in info.get("prs", [])]
-        return dict(sorted(prs, key=lambda item: item[1]["active"]))
+        return dict(sorted(prs, key=lambda item: self._since(item[1])))
 
     def _tracked(self):
-        """The open PRs that aren't ignored, most idle first."""
+        """The open PRs that aren't ignored, most idle (or oldest) first."""
         return {k: pr for k, pr in self._open_prs().items() if k not in self.config["ignored"]}
 
-    def _idle_keys(self):
-        cutoff = time.time() - self.config["attention_hours"] * 3600
-        return {k for k, pr in self._tracked().items() if pr["active"] < cutoff}
+    def _flagged_keys(self):
+        """The PRs idle for longer than attention_hours, or ready for review for longer than attention_days."""
+        if self.config["attention_by"] == "idle":
+            cutoff = time.time() - self.config["attention_hours"] * 3600
+        else:
+            cutoff = time.time() - self.config["attention_days"] * 86400
+        return {k for k, pr in self._tracked().items() if self._since(pr) < cutoff}
 
     def _update_attention(self, quiet=()):
         """Notify about PRs that just crossed the threshold; True if the set changed."""
-        idle = self._idle_keys()
-        if idle == self.attention:
+        flagged = self._flagged_keys()
+        if flagged == self.attention:
             return False
-        new = sorted(k for k in idle - self.attention if k.split("#")[0] not in quiet)
-        self.attention = idle
+        new = sorted(k for k in flagged - self.attention if k.split("#")[0] not in quiet)
+        self.attention = flagged
         if len(new) == 1:
             pr = self._tracked()[new[0]]
-            notify(f'{new[0]}: no activity for {duration(time.time() - pr["active"])}', pr["title"])
+            how = "no activity" if self.config["attention_by"] == "idle" else "ready for review"
+            notify(f'{new[0]}: {how} for {duration(time.time() - self._since(pr))}', pr["title"])
         elif new:
             notify(f"{len(new)} PRs need attention", ", ".join(new))
         return True
@@ -630,6 +707,7 @@ class PRIdleApp(rumps.App):
             [(repo_key(r), "error" in self.info.get(repo_key(r), {}),
               [k for k in tracked if k.split("#")[0] == repo_key(r)]) for r in self.repos],
             [k for k in self._open_prs() if k in self.config["ignored"]],
+            self.config["attention_by"],
         )
         if structure != self.menu_structure:
             self.menu_structure = structure
@@ -640,14 +718,16 @@ class PRIdleApp(rumps.App):
         for r in self.repos:
             self._fill_repo_item(self.repo_items[repo_key(r)], r)
         if self.attention_item is not None:
-            self.attention_item.title = f'Needs attention after {self.config["attention_hours"]:g}h…'
+            self.attention_item._menuitem.setSubtitle_(
+                f'{self.config["attention_hours"]:g}h idle · {self.config["attention_days"]:g}d old'
+            )
         self._render_status()
 
     def _build_menu(self):
         # rumps registers every MenuItem in a class-level dict and clear() doesn't drop them
         self._forget_items(self.menu)
         self.menu.clear()
-        listed, needing, repos, ignored = self.menu_structure
+        listed, needing, repos, ignored, by = self.menu_structure
         prs = self._open_prs()
         self.rows = {}
         items = []
@@ -677,7 +757,7 @@ class PRIdleApp(rumps.App):
                 entries.append(rumps.MenuItem(
                     "Only ignored PRs" if any(k.split("#")[0] == rk for k in ignored) else "No open PRs"
                 ))
-            # most idle first, so the ones needing attention come first; a separator below them
+            # most idle (or oldest) first, so the ones needing attention come first; a separator below them
             for i, key in enumerate(keys):
                 if i and (keys[i - 1] in self.attention) != (key in self.attention):
                     entries.append(None)
@@ -703,7 +783,17 @@ class PRIdleApp(rumps.App):
         self.attention_item = None
         if repos:
             items.append(rumps.MenuItem("Refresh now", callback=self.refresh))
-            self.attention_item = rumps.MenuItem("Needs attention after…", callback=self.set_attention_hours)
+            flag_by = rumps.MenuItem("Flag by: " + ("idle time" if by == "idle" else "age"))
+            for name, title, subtitle in (
+                ("idle", "Idle time", "No commit, comment or review for a while"),
+                ("age", "Age", "Ready for review for a while"),
+            ):
+                choice = rumps.MenuItem(title, callback=partial(self.set_flag_by, name))
+                choice.state = name == by
+                choice._menuitem.setSubtitle_(subtitle)
+                flag_by.add(choice)
+            items.append(flag_by)
+            self.attention_item = rumps.MenuItem("Needs attention after…", callback=self.set_thresholds)
             items.append(self.attention_item)
         items.append(None)
 
@@ -724,9 +814,10 @@ class PRIdleApp(rumps.App):
         rk = key.split("#")[0]
         row.fill(
             duration(now - pr["active"]),
-            duration(now - pr["opened"]),
+            duration(now - pr["ready"]),
             f'#{pr["number"]} {short(pr["title"])}',
             f'{rk} · {pr["author"]}' if section == "top" else pr["author"],
+            self.config["attention_by"],
             key in self.attention,
         )
 
@@ -820,31 +911,29 @@ class PRIdleApp(rumps.App):
 
     def unignore(self, key, _):
         self._edit_ignored(lambda keys: [k for k in keys if k != key])
-        self.attention |= self._idle_keys() & {key}  # no notification: you just put it back
+        self.attention |= self._flagged_keys() & {key}  # no notification: you just put it back
         self._render()
 
-    def set_attention_hours(self, _):
-        response = rumps.Window(
-            message="Tracked PRs need attention after this many hours without a commit, comment or review.",
-            title="Needs attention after",
-            default_text=f'{self.config["attention_hours"]:g}',
-            ok="Save",
-            cancel="Cancel",
-            dimensions=(120, 24),
-        ).run()
-        if not response.clicked:
+    def set_flag_by(self, by, _):
+        self._check_config()
+        self.config["attention_by"] = by
+        self._save_config()
+        self.attention = self._flagged_keys()  # no notifications for a new setting
+        self._render()
+
+    def set_thresholds(self, _):
+        """Both thresholds, hours idle and days since ready for review, in one dialog. Flag by picks which applies."""
+        answer = ask_thresholds(self.config["attention_hours"], self.config["attention_days"])
+        if answer is None:
             return
-        try:
-            hours = float(response.text.strip())
-        except ValueError:
-            hours = 0
-        if not hours > 0:
-            rumps.alert("Not a number of hours", "Expected e.g. 24 or 1.5")
+        hours, days = (parse_threshold(text) for text in answer)
+        if hours is None or days is None:
+            rumps.alert("Not a number", "Expected a number of hours and of days, e.g. 24 and 5, or 1.5 and 2.5")
             return
         self._check_config()
-        self.config["attention_hours"] = int(hours) if hours.is_integer() else hours
+        self.config.update(attention_hours=hours, attention_days=days)
         self._save_config()
-        self.attention = self._idle_keys()  # no notifications for a new threshold
+        self.attention = self._flagged_keys()  # no notifications for a new threshold
         self._render()
 
 
@@ -872,13 +961,29 @@ def cli(argv):
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     remove.add_argument("repo", nargs="+", metavar="REPO", help="repo URL or owner/repo")
+    by = commands.add_parser(
+        "by", help="show or set what flags PRs: idle time or age",
+        description="idle: PRs need attention after HOURS without a commit, comment or review (see hours).\n"
+        "age: PRs need attention once they've been ready for review for DAYS (see days).",
+        epilog="examples:\n  pr_idle by\n  pr_idle by age",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    by.add_argument("by", nargs="?", choices=FLAG_BY, help="new setting (default: show it)")
     hours = commands.add_parser(
-        "hours", help="show or set the attention threshold",
-        description="PRs need attention after this many hours without a commit, comment or review.",
+        "hours", help="show or set the idle threshold",
+        description="When flagging by idle time: PRs need attention after this many hours without a commit, "
+        "comment or review.",
         epilog="examples:\n  pr_idle hours\n  pr_idle hours 48",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     hours.add_argument("hours", nargs="?", type=float, metavar="HOURS", help="new threshold (default: show it)")
+    days = commands.add_parser(
+        "days", help="show or set the age threshold",
+        description="When flagging by age: PRs need attention once they've been ready for review for this many days.",
+        epilog="examples:\n  pr_idle days\n  pr_idle days 7",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    days.add_argument("days", nargs="?", type=float, metavar="DAYS", help="new threshold (default: show it)")
     commands.add_parser("list", help="show tracked repos", description="Print one line per tracked repo.")
     commands.add_parser("help", help="show this help and every command's parameters")
     args = parser.parse_args(argv)
@@ -901,15 +1006,26 @@ def cli(argv):
             print(repo_key(r))
         return
 
-    if args.command == "hours":
-        if args.hours is None:
-            print(f'{config["attention_hours"]:g}')
+    if args.command == "by":
+        if args.by is None:
+            print(config["attention_by"])
             return
-        if not args.hours > 0:
-            sys.exit("Expected a positive number of hours")
-        config["attention_hours"] = int(args.hours) if args.hours.is_integer() else args.hours
+        config["attention_by"] = args.by
         save_config(config)
-        print(f'PRs need attention after {config["attention_hours"]:g}h')
+        print(f"Flagging PRs by {'idle time' if args.by == 'idle' else 'age'}")
+        return
+
+    if args.command in ("hours", "days"):
+        name, value = f"attention_{args.command}", getattr(args, args.command)
+        if value is None:
+            print(f"{config[name]:g}")
+            return
+        if not value > 0:
+            sys.exit(f"Expected a positive number of {args.command}")
+        config[name] = int(value) if value.is_integer() else value
+        save_config(config)
+        what = "idle" if args.command == "hours" else "old"
+        print(f"PRs need attention after {config[name]:g}{args.command[0]} {what}")
         return
 
     if args.command == "add":

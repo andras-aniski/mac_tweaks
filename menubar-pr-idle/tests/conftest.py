@@ -13,14 +13,14 @@ NOW = time.time()
 HOUR = 3600
 
 
-def make_pr(number, *, idle_h=50, open_h=100):
-    """A PR as summarize() returns it, idle and open for that many hours."""
+def make_pr(number, *, idle_h=50, age_h=100):
+    """A PR as summarize() returns it: idle for idle_h hours, ready for review for age_h hours."""
     return {
         "number": number,
         "title": f"PR {number}",
         "url": f"https://github.com/acme/web/pull/{number}",
         "author": "ann",
-        "opened": NOW - open_h * HOUR,
+        "ready": NOW - age_h * HOUR,
         "active": NOW - idle_h * HOUR,
     }
 
