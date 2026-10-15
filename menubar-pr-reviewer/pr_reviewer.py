@@ -468,10 +468,11 @@ class ReviewWindow:
         self.targets = []  # the buttons' targets: NSButton doesn't retain them
         self.actions = actions
         self.comments, self.summary = fresh, result["summary"]
-        # what Push posts: every comment, and the summary as the review's text; untick to leave one out
+        # what Push posts: every comment, ticked to start with; the summary, as the review's text, only if ticked
         self.picked = [True] * len(fresh)
         self.summary_new = summary_new
-        self.summary_picked = bool(self.summary) and summary_new and bool(actions.get("push"))
+        self.summary_pushable = bool(self.summary) and summary_new and bool(actions.get("push"))
+        self.summary_picked = False
         self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
             NSMakeRect(0, 0, self.WIDTH, self.HEIGHT),
             NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable,
@@ -559,12 +560,12 @@ class ReviewWindow:
             doc.addSubview_(view)
             y += view.frame().size.height
 
-        def checkbox(index):
+        def checkbox(index, ticked=True):
             target = ButtonTarget.alloc().init()
             target.callback = partial(self._toggle, index)
             self.targets.append(target)
             box = NSButton.checkboxWithTitle_target_action_("", target, "fire:")
-            box.setState_(1)
+            box.setState_(1 if ticked else 0)
             box.setFrameOrigin_(NSMakePoint(pad, y - 1))
             doc.addSubview_(box)
             if index is None:
@@ -574,8 +575,8 @@ class ReviewWindow:
 
         self.boxes = {}
         if self.summary:
-            if self.summary_picked:
-                checkbox(None)
+            if self.summary_pushable:
+                checkbox(None, ticked=False)
                 block(RichText().add("Summary", RichText().bold)
                       .add("  ·  posted as the review's text\n", RichText().small, secondary)
                       .markdown(self.summary), indent)
