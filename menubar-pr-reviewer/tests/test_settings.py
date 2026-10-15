@@ -58,6 +58,18 @@ def test_author_lists(app):
     assert m.load_config()["block"] == ["renovate[bot]", "dependabot"]
 
 
+def test_one_author_list_at_a_time(app):
+    app.set_authors("allow", "alice")
+    assert "Only PRs by" in app.set_authors("block", "renovate")
+    assert m.load_config()["block"] == []
+    assert app.set_authors("allow", "") is None and app.set_authors("block", "renovate") is None
+
+    app.config.update(allow=["alice"], block=["renovate"])  # both, from a hand edit: clearing one still works
+    assert app.set_authors("allow", "bob")
+    assert app.set_authors("allow", "") is None
+    assert m.load_config()["allow"] == []
+
+
 def test_automation_switches(app, monkeypatch):
     app.set_automation("review", True)
     automation = m.load_config()["automation"]

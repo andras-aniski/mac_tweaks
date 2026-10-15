@@ -889,8 +889,16 @@ def same_login(login):
     return login.lower().removesuffix("[bot]")
 
 
+AUTHOR_LISTS = {"allow": "Only PRs by", "block": "Skip PRs by"}  # one or the other, not both
+
+
+def other_list(name):
+    return "block" if name == "allow" else "allow"
+
+
 def author_ok(author, config):
-    """The allow list applies only when it isn't empty; the block list always."""
+    """The allow list applies only when it isn't empty; the block list always. A config edited by hand can have
+    both."""
     allow = {same_login(a) for a in config["allow"]}
     block = {same_login(a) for a in config["block"]}
     return (not allow or same_login(author) in allow) and same_login(author) not in block
@@ -2186,8 +2194,12 @@ class PRReviewerApp(rumps.App):
         self._save_config()
 
     def set_authors(self, name, text):
+        """Returns an error message, or None. Only one of the lists can have logins: clearing one always works."""
         self._check_config()
-        self.config[name] = parse_logins(text)
+        logins = parse_logins(text)
+        if logins and self.config[other_list(name)]:
+            return f"Use one list or the other: clear {AUTHOR_LISTS[other_list(name)]} first."
+        self.config[name] = logins
         self._save_config()
         self._render()
 
@@ -2217,8 +2229,9 @@ def cli(argv):
     )
     remove.add_argument("repo", nargs="+", metavar="REPO", help="repo URL or owner/repo")
     for name, what in (
-        ("allow", "Only PRs by these authors show up in To review. When the list is empty, everyone's do."),
-        ("block", "PRs by these authors never show up in To review."),
+        ("allow", "Only PRs by these authors show up in To review. When the list is empty, everyone's do. "
+                  "Can't be used together with the block list."),
+        ("block", "PRs by these authors never show up in To review. Can't be used together with the allow list."),
     ):
         sub = commands.add_parser(
             name, help=f"show or edit the {name} list of authors",
@@ -2311,6 +2324,9 @@ def cli(argv):
             gone = {same_login(a) for a in changes}
             config[args.command] = [a for a in logins if same_login(a) not in gone]
         else:
+            if changes and config[other_list(args.command)]:
+                sys.exit(f"Use one list or the other: clear the {other_list(args.command)} list first "
+                         f"(pr_reviewer {other_list(args.command)} --remove ...)")
             have = {same_login(a) for a in logins}
             logins += [a for a in changes if same_login(a) not in have]
         if changes:

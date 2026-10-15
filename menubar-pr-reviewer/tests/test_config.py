@@ -75,10 +75,13 @@ def test_cli(config_path, capsys):
     assert cli(capsys, "add", "acme/web") == "Already tracking acme/web"
     assert cli(capsys, "allow", "alice", "@Bob,carol") == "alice, Bob, carol"
     assert cli(capsys, "allow", "--remove", "bob") == "alice, carol"
+    with pytest.raises(SystemExit, match="one list or the other"):
+        m.cli(["block", "renovate[bot]"])
+    assert cli(capsys, "allow", "--remove", "alice", "carol") == "(everyone)"
     assert cli(capsys, "block", "renovate[bot]") == "renovate[bot]"
     assert cli(capsys, "budget", "250") == "250 AIC a month, 0.0 used"
     assert cli(capsys, "budget", "--off") == "No limit, 0.0 AIC used this month"
-    assert cli(capsys, "list").splitlines() == ["acme/web", "allow: alice, carol", "block: renovate[bot]"]
+    assert cli(capsys, "list").splitlines() == ["acme/web", "allow: (everyone)", "block: renovate[bot]"]
     with pytest.raises(SystemExit):
         m.cli(["remove", "nope/x"])
     with pytest.raises(SystemExit):

@@ -349,6 +349,16 @@ class SettingsWindow:
                       + [(". Once the budget is used up, no new review starts. Empty: no limit.", None)],
             "wait": "After the PR is marked ready, pushed to, or replied to in your threads.",
         }
+        # one author list or the other: the empty one is off while the other has logins
+        for name, other, label in (("allow", "block", "Skip PRs by"), ("block", "allow", "Only PRs by")):
+            if config[name] and config[other]:
+                hints[name] = "Both lists have logins: clear one of them."
+            elif config[other]:
+                hints[name] = f"Off while {label} has logins: use one list or the other."
+            enabled = not config[other] or bool(config[name])
+            self.fields[name]["field"].setEnabled_(enabled)
+            self.fields[name]["label"].setTextColor_(
+                NSColor.labelColor() if enabled else NSColor.disabledControlTextColor())
         for name, f in self.fields.items():
             if name not in self.dirty and f["field"].stringValue() != values[name]:
                 f["field"].setStringValue_(values[name])

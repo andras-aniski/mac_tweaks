@@ -12,7 +12,7 @@ Watches GitHub repos for pull requests to review, from the macOS menu bar (built
 
 - **Tracked repos**: add a repo by pasting its URL into **Settings…**, remove it there too. **Settings…** lists each one with its open PRs. A repo that can't be read (e.g. not found, or no access) also shows in the menu, with the error; click it to open it on GitHub.
 - **New PR alerts**: a notification when a new PR to review shows up in a tracked repo, once per PR. Checked every 15 minutes by default; change it in **Settings…**.
-- **Author filters**: review only certain authors' PRs, or skip some (e.g. bots). In **Settings…**: **Only PRs by** and **Skip PRs by**.
+- **Author filters**: review only certain authors' PRs, or skip some (e.g. bots). In **Settings…**: **Only PRs by** or **Skip PRs by**, one at a time: while one has logins, the other is greyed out. PRs you've already reviewed stay in view whoever wrote them.
 - **Ignore**: hides a PR you won't review. Click **Ignore** on its row; undo it from the **Ignored** submenu.
 - **Copilot review**: Copilot checks the PR in the background for acceptance criteria, alignment with the repo's docs, technical correctness, and the conventions the repo already follows in that area. Click **Review** on its row; the button shows how it's going.
 - **Comment levels**: each comment is marked `MUST-FIX`, `SHOULD-FIX`, `QUESTION`, `CONSIDER` or `NITPICK`, in the sb-fe-mfe review format. Copilot only suggests fixes it's confident about; when it's unsure, or the acceptance criteria, docs and code disagree, it asks the author a `QUESTION` instead.
@@ -75,7 +75,7 @@ The menu bar count is the number of PRs in To review and To approve.
 
 - **Repositories**: the tracked repos, with their open PRs, or the error when one can't be read. Paste a repo URL (any github.com page in the repo works) or `owner/repo` and press **Track**; when the clipboard holds a repo you don't track yet, the window opens with it filled in. **Remove** stops tracking a repo (it asks first: its Copilot reviews are deleted).
 - **Check for PRs every**: how often the tracked repos are checked, in minutes; 15 by default.
-- **Only PRs by**: when the list isn't empty, only PRs by these authors show up in To review.
+- **Only PRs by**: when the list isn't empty, only PRs by these authors show up in To review. Can't be used together with **Skip PRs by**: while one list has logins, the other is greyed out.
 - **Skip PRs by**: PRs by these authors never show up in To review.
 - **Monthly AI credit budget**: AI credits Copilot reviews may use per calendar month; empty for no limit. The line under it shows how much this month used: finished reviews, plus what running ones have spent so far. Once the budget is used up, the **Review** button reads **Over budget** (click it to see why, or to change the budget), and **Retry** on a failed review is blocked too. Reviews that already ran can still be pushed and approved. Each review is capped at what's left of the budget (`--max-ai-credits`); Copilot's smallest cap is 30, so the budget can be overshot by up to that.
 - **Review model**: the model new reviews run on: **Copilot default** (the model set in Copilot CLI, shown in brackets), **Auto** (Copilot picks), or one of the models Copilot CLI offers. Running reviews keep theirs.
