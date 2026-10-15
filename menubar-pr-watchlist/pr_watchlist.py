@@ -34,6 +34,7 @@ from PyObjCTools import AppHelper
 import banner
 
 POLL_SECONDS = 60
+BLINK_SECONDS = 0.5
 API_URL = "https://api.github.com/graphql"
 PR_RE = re.compile(r"(?:https?://github\.com/)?([\w.-]+)/([\w.-]+)(?:/pull/|#)(\d+)(?:[/?#]\S*)?")
 CONFIG_PATH = os.path.join(rumps.application_support("menubar-pr-watchlist"), "config.json")
@@ -71,20 +72,22 @@ fragment F on PullRequest {
 
 LED_SIZE = 14.0
 LED_CORE = 8.0
+LED_DIM = 0.25  # alpha of a blinking LED's off phase, so its spot stays visible
 _led_cache = {}
 
 
-def led_image(rgb):
+def led_image(rgb, dim=False):
     """A flat, solid dot with a soft glow, like the caps-lock / MagSafe LEDs."""
-    if rgb in _led_cache:
-        return _led_cache[rgb]
-    base = NSColor.colorWithSRGBRed_green_blue_alpha_(*rgb, 1.0)
+    if (rgb, dim) in _led_cache:
+        return _led_cache[rgb, dim]
+    alpha = LED_DIM if dim else 1.0
+    base = NSColor.colorWithSRGBRed_green_blue_alpha_(*rgb, alpha)
 
     def draw(_rect):
         c = LED_SIZE / 2
         center = NSMakePoint(c, c)
         halo = NSGradient.alloc().initWithStartingColor_endingColor_(
-            base.colorWithAlphaComponent_(0.45), base.colorWithAlphaComponent_(0.0)
+            base.colorWithAlphaComponent_(0.45 * alpha), base.colorWithAlphaComponent_(0.0)
         )
         halo.drawFromCenter_radius_toCenter_radius_options_(center, LED_CORE / 2 - 1, center, c, 0)
 
@@ -95,7 +98,7 @@ def led_image(rgb):
         return True
 
     image = NSImage.imageWithSize_flipped_drawingHandler_(NSMakeSize(LED_SIZE, LED_SIZE), False, draw)
-    _led_cache[rgb] = image
+    _led_cache[rgb, dim] = image
     return image
 
 
@@ -150,6 +153,17 @@ def unresolved_count(pr):
     return sum(1 for t in pr["reviewThreads"]["nodes"] if not t["isResolved"])
 
 
+def checks_rollup(pr):
+    commits = pr["commits"]["nodes"]
+    rollup = commits and commits[0]["commit"]["statusCheckRollup"]
+    return rollup["state"] if rollup else None
+
+
+def checks_running(pr):
+    """CI is still running on an open PR's last commit, whatever else it is waiting for."""
+    return pr["state"] == "OPEN" and checks_rollup(pr) in ("PENDING", "EXPECTED")
+
+
 def classify(pr):
     """Map a GraphQL PR to a state key; None means GitHub is still computing mergeability."""
     if pr["state"] == "MERGED":
@@ -158,15 +172,14 @@ def classify(pr):
         return "closed"
     if pr["mergeable"] == "CONFLICTING":
         return "conflict"
-    commits = pr["commits"]["nodes"]
-    rollup = commits and commits[0]["commit"]["statusCheckRollup"]
-    if rollup and rollup["state"] in ("FAILURE", "ERROR"):
+    rollup = checks_rollup(pr)
+    if rollup in ("FAILURE", "ERROR"):
         return "failing"
     if unresolved_count(pr) or pr["reviewDecision"] == "CHANGES_REQUESTED":
         return "comments"
     if pr["mergeable"] == "UNKNOWN" or pr["mergeStateStatus"] == "UNKNOWN":
         return None
-    if rollup and rollup["state"] in ("PENDING", "EXPECTED"):
+    if rollup in ("PENDING", "EXPECTED"):
         return "waiting"  # UNSTABLE also covers running non-required checks
     if not pr["isDraft"] and pr["mergeStateStatus"] in ("CLEAN", "HAS_HOOKS", "UNSTABLE"):
         return "ready"
@@ -241,7 +254,7 @@ class PRWatchlistApp(rumps.App):
         except ValueError:
             self.config = {"prs": [], "show_labels": True}
         self.config_mtime = config_mtime()
-        self.info = {}  # key -> {"state", "title", "url", "unresolved"}
+        self.info = {}  # key -> {"state", "title", "url", "unresolved", "running"}
         self.token = None
         self.busy = False
         self.error = None
@@ -251,6 +264,8 @@ class PRWatchlistApp(rumps.App):
         self.pr_items = {}  # key -> MenuItem
         self.labels_item = self.status_item = None
         self.timer = rumps.Timer(self.tick, 1)
+        self.blink_timer = rumps.Timer(self.blink, BLINK_SECONDS)
+        self.blink_on = True
         rumps.events.before_start.register(self._on_start)
 
     @property
@@ -259,9 +274,10 @@ class PRWatchlistApp(rumps.App):
 
     def _on_start(self):
         self._render()
-        self.timer.start()
-        # keep ticking while the menu is open, so the countdown stays live
-        NSRunLoop.currentRunLoop().addTimer_forMode_(self.timer._nstimer, NSRunLoopCommonModes)
+        # keep ticking while the menu is open, so the countdown stays live and LEDs keep blinking
+        for timer in (self.timer, self.blink_timer):
+            timer.start()
+            NSRunLoop.currentRunLoop().addTimer_forMode_(timer._nstimer, NSRunLoopCommonModes)
 
     # config
 
@@ -294,6 +310,20 @@ class PRWatchlistApp(rumps.App):
         if time.time() >= self.next_poll_at:
             self.poll()
         self._render_status()
+
+    def blink(self, _):
+        """Blink the LEDs of PRs whose checks are running."""
+        if not any(self._running(p) for p in self.prs):
+            if self.blink_on:
+                return
+            self.blink_on = True
+        else:
+            self.blink_on = not self.blink_on
+        self._render_title()
+        for p in self.prs:
+            item = self.pr_items.get(pr_key(p))
+            if item is not None:
+                item._menuitem.setImage_(self._led(p))
 
     def poll(self, _=None):
         if self.busy or not self.prs:
@@ -332,11 +362,12 @@ class PRWatchlistApp(rumps.App):
         key = pr_key(p)
         old = self.info.get(key)
         if pr is None:
-            self.info[key] = {"state": "error", "title": "", "url": self._url(p), "unresolved": 0}
+            self.info[key] = {"state": "error", "title": "", "url": self._url(p), "unresolved": 0, "running": False}
             return
         state = classify(pr) or (old["state"] if old else "pending")
         unresolved = unresolved_count(pr)
-        self.info[key] = {"state": state, "title": pr["title"], "url": pr["url"], "unresolved": unresolved}
+        self.info[key] = {"state": state, "title": pr["title"], "url": pr["url"], "unresolved": unresolved,
+                          "running": checks_running(pr)}
         if not old or old["state"] in ("pending", "error"):
             return
         if state != old["state"]:
@@ -352,6 +383,12 @@ class PRWatchlistApp(rumps.App):
 
     def _state(self, p):
         return self.info.get(pr_key(p), {}).get("state", "pending")
+
+    def _running(self, p):
+        return self.info.get(pr_key(p), {}).get("running", False)
+
+    def _led(self, p):
+        return led_image(STATES[self._state(p)][0], dim=self._running(p) and not self.blink_on)
 
     def _render(self):
         self._render_title()
@@ -371,7 +408,7 @@ class PRWatchlistApp(rumps.App):
             if i:
                 text("  " if self.config["show_labels"] else " ")
             attachment = NSTextAttachment.alloc().init()
-            attachment.setImage_(led_image(STATES[self._state(p)][0]))
+            attachment.setImage_(self._led(p))
             attachment.setBounds_(NSMakeRect(0, (font.capHeight() - LED_SIZE) / 2, LED_SIZE, LED_SIZE))
             title.appendAttributedString_(NSAttributedString.attributedStringWithAttachment_(attachment))
             if self.config["show_labels"]:
@@ -440,7 +477,9 @@ class PRWatchlistApp(rumps.App):
             name = name[:59] + "…"
         item.title = f'{p["label"]} — {name}'
         item.set_callback(partial(self._open, info.get("url") or self._url(p)))
-        item._menuitem.setImage_(led_image(STATES[state][0]))
+        if info.get("running"):
+            detail += " · CI running"
+        item._menuitem.setImage_(self._led(p))
         item._menuitem.setSubtitle_(f"{pr_key(p)} · {detail}")
 
     def _render_status(self):

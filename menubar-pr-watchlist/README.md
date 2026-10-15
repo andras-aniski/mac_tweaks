@@ -11,6 +11,7 @@ Watches GitHub pull requests from the macOS menu bar (built with [rumps](https:/
 ## Features
 
 - **PR LEDs**: one LED per watched PR in the menu bar; its colour says whether the PR has conflicts or failing checks, open review threads, is waiting, ready to merge, merged or closed. See [States](#states).
+- **Running CI**: while CI checks are still running on a PR, its LED blinks, whatever its colour, and its menu entry says `CI running`. So a blue or yellow PR that is waiting for reviews can still turn red.
 - **Watchlist**: **Add PR…** pre-fills a PR URL from the clipboard. **Remove** drops one PR, **Remove merged/closed** all finished ones at once.
 - **Labels**: a short name next to each LED, e.g. `auth`. Type it after the URL when adding the PR, change it with **Rename**. Turn off **Show labels** for dots only.
 - **PR details**: the menu lists each PR with its title, and its state on a second line. Click it to open the PR in the browser.
@@ -30,6 +31,8 @@ Checked in this order; the first match wins.
 | green | ready to merge |
 | purple | merged |
 | gray | closed, not found / no access, or not checked yet |
+
+An LED blinks while the PR's CI checks are running. A failed check turns it red right away, even while other checks still run.
 
 When GitHub is still computing mergeability (right after a push), the previous state is kept.
 A banner is shown whenever a PR changes state, and when a PR gets a new unresolved thread.
@@ -64,6 +67,15 @@ Needs macOS 14 or later (for the second line in menu items).
 ```sh
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
+```
+
+## Tests
+
+The logic is covered by tests: how a PR's state is worked out, when its LED blinks, and which banners are shown. They run on a scratch config, with GitHub stubbed. The menu isn't; check it by hand.
+
+```sh
+.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/python -m pytest tests
 ```
 
 ## Run
