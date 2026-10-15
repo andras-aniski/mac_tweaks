@@ -1079,6 +1079,7 @@ class PRReviewerApp(rumps.App):
                 job.update(status="failed", error="Interrupted: the app quit while preparing the review")
         self.procs = {}  # key -> Popen of the reviews started by this run
         self.auto_busy = set()  # keys with an automatic push or approval in flight
+        self.approving = set()  # keys approved with a row's Approve button, in flight
         self.automated_at = 0
         self.started_at = time.time()
         self.models = []  # what Copilot CLI offers, for Settings; fetched when Settings opens
@@ -1359,7 +1360,7 @@ class PRReviewerApp(rumps.App):
         structure = (
             [key for key in to_review if key not in done],
             [key for key in to_review if key in done],
-            [key for key in to_review if tracked[key]["review"]],  # back from Reviewed: no Ignore button
+            [key for key in to_review if tracked[key]["review"]],  # back from Reviewed: Approve, not Ignore
             list(reviewed),
             list(ignored),
             list(approved),
@@ -1389,9 +1390,10 @@ class PRReviewerApp(rumps.App):
 
         def rows(keys, buttons, back=()):
             def row(key):
+                # it's been reviewed: no ignoring, but approving once my comments are addressed
+                own = [buttons[0], ("Approve", self.approve)] if key in back else buttons
                 item = pr_row_item(key, partial(self._open_pr, key), [
-                    (title, partial(callback, key)) for title, callback in buttons
-                    if not (key in back and title == "Ignore")  # it's been reviewed: no ignoring
+                    (title, partial(callback, key)) for title, callback in own
                 ])
                 self.rows[key] = item._menuitem.view()
                 return item
@@ -1484,6 +1486,7 @@ class PRReviewerApp(rumps.App):
             detail.append((f"{resolved}/{total} resolved", GREEN if resolved == total else None))
         detail += self._review_detail(job, pr, now)
         if not reviewed:  # back in To review
+            row.set_button(1, *(("Approving…", ORANGE) if key in self.approving else ("Approve",)))
             detail.append((f" · {back_to_review(pr)}", GREEN))
             if not job:
                 detail += self._auto_detail(key, pr, now)
@@ -1979,15 +1982,54 @@ class PRReviewerApp(rumps.App):
             window.set_approving(None)
         rumps.alert(f"Couldn't approve {key}", error)
 
-    def _approved(self, key, unpushed, auto=False):
+    def approve(self, key):
+        """The Approve button of a PR back from Reviewed: returns the dialog to show once the menu has closed."""
+        if key not in self.approving:
+            return partial(self._approve_back, key)
+
+    def _approve_back(self, key):
+        """Approve a PR I reviewed before at its latest commit, e.g. now that my comments are resolved."""
+        pr = self._tracked().get(key)
+        if not pr or rumps.alert(
+            f"Approve {key}?",
+            f"It's back in To review: {back_to_review(pr) or 'reviewed before'}. This approves its latest commit.",
+            ok="Approve", cancel="Cancel",
+        ) != 1:
+            return
+        job = self.state["reviews"].get(key)
+        # a running Copilot review, or one with comments, stays: stop, push or discard it from the row
+        keep = bool(job) and (job["status"] in ("preparing", "running") or (job["status"] == "done" and job["comments"]))
+        self.approving.add(key)
+        self._render()
+
+        def worker():
+            try:
+                copilot_review.approve(key, None, self.token or gh_token())
+            except urllib.error.HTTPError as e:
+                AppHelper.callAfter(self._approve_back_failed, key, http_error_text(e))
+                return
+            except Exception as e:
+                AppHelper.callAfter(self._approve_back_failed, key, str(e))
+                return
+            AppHelper.callAfter(partial(self._approved, key, 0, keep_review=keep))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _approve_back_failed(self, key, error):
+        self.approving.discard(key)
+        self._render()
+        rumps.alert(f"Couldn't approve {key}", error)
+
+    def _approved(self, key, unpushed, auto=False, keep_review=False):
         self.auto_busy.discard(key)
+        self.approving.discard(key)
         history.append(history_path(), {"event": "approve", "key": key, "auto": auto})
         notify(f"Approved {key}" + (" automatically" if auto else ""), self._tracked().get(key, {}).get("title", ""))
         if unpushed:  # keep the window, to push or discard the comments
             window = self.windows.get(key)
             if window:
                 window.set_approving("approved")
-        else:
+        elif not keep_review:
             self._drop_review(key)
             self._save_state()
         self.next_poll_at = 0  # the PR moves to Reviewed, as approved

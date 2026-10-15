@@ -19,7 +19,7 @@ Watches GitHub repos for pull requests to review, from the macOS menu bar (built
 - **Readable prompt**: see exactly what Copilot is told. In **Settings…**: **Review prompt…**.
 - **Check before posting**: you see every comment, and the AI credits spent, before anything goes to GitHub, and pick which to post: each comment, and the summary, has a checkbox. Click **Ready to comment** to open the review window, then **Push** to post the ticked ones as one review.
 - **No duplicate comments**: comments already on the PR, by anyone, are left out, including ones posted while you were reading.
-- **Approve**: approves the PR from the review window, with or without comments.
+- **Approve**: approves the PR from the review window, with or without comments. A PR you reviewed before that's back in To review, e.g. once your comments are resolved, has an **Approve** button on its row too.
 - **Follow-ups**: PRs you reviewed wait in **Reviewed** and come back to **To review** when all your comments are resolved, the author asks for another review, or your review is dismissed (e.g. an approval dismissed by a new push). Approved ones wait in the **Approved** submenu.
 - **Automation**: reviews PRs by itself a while after they're ready (30 minutes by default), and can push the comments and approve PRs whose review found nothing. All off by default. In **Settings…** → **Automation**. The row says when, in blue: "auto-review in 12m". Nothing automatic happens in the first 5 minutes after the app starts, so you can see what's due first.
 - **Review model, effort and context**: the Copilot model reviews run on, how hard it thinks, and its context window. Pick them in **Settings…** under **Copilot reviews**; they apply to reviews started from then on, the subagents included. By default: the model set in Copilot CLI, medium effort, long context.
@@ -57,7 +57,7 @@ stateDiagram-v2
 With automation on, the moves out of To review and To approve can happen by themselves: a review starts once the wait is over, and its comments are pushed or the PR approved. A PR leaves every group when it's merged, closed or turned back into a draft. Your own PRs are in none.
 
 - **To review**: open, non-draft PRs that you haven't reviewed or ignored, the newest first (by when they were opened or marked ready for review). A notification is shown when a new one appears, once per PR. PRs that were already open when a repo is added only show up in the menu.
-  A PR you reviewed comes back here, at the top and with a notification, when the author requests your review again, when your review is dismissed (some repos dismiss approvals on a new push), or when all the review threads you started are resolved and something happened since your last review (new commits, or replies in them). It then has no Ignore button. Reviewing it again (e.g. pushing a new round of comments) sends it back to Reviewed.
+  A PR you reviewed comes back here, at the top and with a notification, when the author requests your review again, when your review is dismissed (some repos dismiss approvals on a new push), or when all the review threads you started are resolved and something happened since your last review (new commits, or replies in them). It then has an **Approve** button instead of **Ignore**. Reviewing it again (e.g. pushing a new round of comments) sends it back to Reviewed.
 - **To approve**: PRs in To review whose Copilot review is done, waiting for you: **No comments** (approve it) or **Ready to comment** (push the comments, approve, or both). Running and failed reviews stay in To review. The menu bar number counts both groups.
 - **Reviewed**: PRs you submitted a review for on GitHub (an approval, a change request or a comment review), waiting on the author. Clicking **Review** alone doesn't move a PR here. Their dot shows your review state as GitHub does (a comment review doesn't undo an approval or a change request): red for changes requested, gray otherwise. The second line counts how many of the review threads you started are resolved, in green once all are. New commits alone don't move a PR or notify you: it comes back to To review once your threads are resolved.
 - **Approved**: PRs you approved, in a submenu; click one to open it. One moves to To review when the author requests your review again, or when your approval is dismissed.
@@ -103,6 +103,7 @@ The author lists take GitHub logins (case doesn't matter, `@` and `[bot]` are op
   - **No comments** (blue): Copilot found nothing worth a comment. Click to see its summary and the AI credits used, and to approve.
   - **Review failed** (red): click to see why, and retry.
 - **Ignore**: moves the PR to Ignored.
+- **Approve**: on a PR back from Reviewed, in place of **Ignore**. Approves its latest commit, after asking; it reads **Approving…** (orange) meanwhile. A Copilot review of the PR that has comments, or is still running, stays.
 - Click anywhere else on a PR row to open it in the browser.
 
 Starting a review and **Ignore** keep the menu open, so you can work through the list. Buttons that show a dialog or a window close it.
