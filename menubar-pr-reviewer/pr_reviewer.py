@@ -19,6 +19,7 @@ from functools import partial
 import objc
 import rumps
 
+import banner
 import copilot_review
 import history
 import settings_view
@@ -946,7 +947,16 @@ def short(title):
     return title if len(title) <= 60 else title[:59] + "…"
 
 
-def notify(title, message):
+def notify(title, message, on_click=None):
+    """A notification, or with on_click, a banner of the app's own that runs it when clicked: clicking an osascript
+    notification only opens Script Editor."""
+    if on_click is None:
+        notify_osascript(title, message)
+    else:
+        banner.show(title, message, on_click)
+
+
+def notify_osascript(title, message):
     subprocess.Popen([
         "osascript",
         "-e", "on run argv",
@@ -1623,6 +1633,12 @@ class PRReviewerApp(rumps.App):
                 self._drop_review(key)
                 self._start_review(key)
 
+    def _notification_clicked(self, info):
+        """A review's banner does what the row's button does: open the comments, or offer to retry."""
+        job = self.state["reviews"].get(info.get("review"))
+        if job and job["session"] == info.get("session"):  # not one started since
+            self._review_dialog(info["review"])
+
     def _budget_alert(self):
         if rumps.alert(
             "This month's review budget is used up",
@@ -1694,7 +1710,8 @@ class PRReviewerApp(rumps.App):
         if job and job["session"] == session:
             job.update(status="failed", error=error)
             self._save_state()
-            notify(f"Review of {key} failed", error)
+            notify(f"Review of {key} failed", error,
+                   partial(self._notification_clicked, {"review": key, "session": session}))
             self._render()
 
     def _auto_review_in(self, key, pr, now):
@@ -1795,10 +1812,12 @@ class PRReviewerApp(rumps.App):
                 job["status"] = "done"
                 n = job["comments"]
                 notify(f"Review of {key} is done",
-                       f'{n} comment{"s" if n != 1 else ""} · {job["credits"]["total"]:.1f} AI credits')
+                       f'{n} comment{"s" if n != 1 else ""} · {job["credits"]["total"]:.1f} AI credits',
+                       partial(self._notification_clicked, {"review": key, "session": job["session"]}))
             except Exception as e:
                 job.update(status="failed", error=str(e))
-                notify(f"Review of {key} failed", str(e))
+                notify(f"Review of {key} failed", str(e),
+                       partial(self._notification_clicked, {"review": key, "session": job["session"]}))
             self._log_review(key, job)
             self._save_state()
             threading.Thread(target=copilot_review.remove_checkout, args=(workdir,), daemon=True).start()

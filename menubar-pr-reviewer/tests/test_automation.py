@@ -180,3 +180,14 @@ def test_review_cap_follows_the_budget(app, monkeypatch):
             app.config["copilot_max_ai_credits"] = cap
         monkeypatch.setattr(app, "_month_spent", lambda spent=spent: spent)
         assert app._review_cap() == expected, (budget, spent, cap)
+
+
+def test_a_review_notification_opens_the_review(app, monkeypatch):
+    opened = []
+    monkeypatch.setattr(app, "_review_dialog", opened.append)
+    app.state["reviews"][key(2)] = {"status": "done", "session": "s2"}
+    app._notification_clicked({"review": key(2), "session": "s2"})
+    app._notification_clicked({"review": key(2), "session": "s1"})  # an earlier review of the PR
+    app._notification_clicked({"review": key(3), "session": "s3"})  # since discarded
+    app._notification_clicked({})  # not about a review
+    assert opened == [key(2)]

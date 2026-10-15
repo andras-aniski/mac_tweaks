@@ -51,7 +51,7 @@ class InlineThread:
 def notes(monkeypatch):
     """The notifications the app shows, by title."""
     sent = []
-    monkeypatch.setattr(m, "notify", lambda title, message: sent.append(title))
+    monkeypatch.setattr(m, "notify", lambda title, message, on_click=None: sent.append(title))
     return sent
 
 
