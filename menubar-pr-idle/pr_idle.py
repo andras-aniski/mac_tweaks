@@ -13,13 +13,17 @@ import webbrowser
 from datetime import datetime
 from functools import partial
 
+import objc
 import rumps
 from AppKit import (
     NSApplication,
     NSApplicationActivationPolicyAccessory,
     NSAttributedString,
+    NSBezelStyleRounded,
     NSBezierPath,
+    NSButton,
     NSColor,
+    NSControlSizeSmall,
     NSFont,
     NSFontAttributeName,
     NSFontWeightRegular,
@@ -28,6 +32,8 @@ from AppKit import (
     NSGradient,
     NSImage,
     NSImageSymbolConfiguration,
+    NSImageView,
+    NSLineBreakByTruncatingTail,
     NSMutableAttributedString,
     NSMutableParagraphStyle,
     NSParagraphStyleAttributeName,
@@ -35,7 +41,15 @@ from AppKit import (
     NSPasteboardTypeString,
     NSTextAlignmentLeft,
     NSTextAttachment,
+    NSTextField,
     NSTextTab,
+    NSTrackingActiveAlways,
+    NSTrackingArea,
+    NSTrackingInVisibleRect,
+    NSTrackingMouseEnteredAndExited,
+    NSView,
+    NSViewMinXMargin,
+    NSViewWidthSizable,
 )
 from Foundation import NSMakePoint, NSMakeRect, NSMakeSize, NSRunLoop, NSRunLoopCommonModes
 from PyObjCTools import AppHelper
@@ -224,13 +238,13 @@ def short(title):
     return title if len(title) <= 60 else title[:59] + "…"
 
 
-def pr_row_title(idle, opened, title, detail, highlight):
-    """Two lines, with the idle and open times in columns up front and their labels below them:
+def pr_row_lines(idle, opened, title, detail, highlight, selected=False):
+    """The two lines of a PR row, with the idle and open times in columns up front and their labels below them:
 
         6d 23h   12d   #123 Title
         idle     open  owner/repo · author
 
-    Drawn by hand: NSMenuItem.setSubtitle_ reserves a third line for long subtitles even when they fit.
+    selected: in the menu's selection colour, for the hovered row.
     """
     size = NSFont.menuFontOfSize_(0).pointSize()
     bold = NSFont.monospacedDigitSystemFontOfSize_weight_(size, NSFontWeightSemibold)
@@ -241,20 +255,147 @@ def pr_row_title(idle, opened, title, detail, highlight):
     style.setTabStops_([
         NSTextTab.alloc().initWithTextAlignment_location_options_(NSTextAlignmentLeft, column * i, {}) for i in (1, 2)
     ])
+    style.setLineBreakMode_(NSLineBreakByTruncatingTail)
     primary, secondary = NSColor.labelColor(), NSColor.secondaryLabelColor()
     idle_color = NSColor.colorWithSRGBRed_green_blue_alpha_(*ORANGE, 1.0) if highlight else primary
+    if selected:
+        primary = secondary = idle_color = NSColor.selectedMenuItemTextColor()
 
-    text = NSMutableAttributedString.alloc().init()
-    for part, font, color in (
-        (idle, bold, idle_color),
-        ("\t" + opened, digits, primary),
-        ("\t" + title, NSFont.menuFontOfSize_(0), primary),
-        ("\nidle\topen\t" + detail, small, secondary),
-    ):
-        text.appendAttributedString_(NSAttributedString.alloc().initWithString_attributes_(part, {
-            NSFontAttributeName: font, NSForegroundColorAttributeName: color, NSParagraphStyleAttributeName: style,
-        }))
-    return text
+    def line(parts):
+        text = NSMutableAttributedString.alloc().init()
+        for part, font, color in parts:
+            text.appendAttributedString_(NSAttributedString.alloc().initWithString_attributes_(part, {
+                NSFontAttributeName: font, NSForegroundColorAttributeName: color, NSParagraphStyleAttributeName: style,
+            }))
+        return text
+
+    return (
+        line([(idle, bold, idle_color), ("\t" + opened, digits, primary), ("\t" + title, NSFont.menuFontOfSize_(0), primary)]),
+        line([("idle\topen\t" + detail, small, secondary)]),
+    )
+
+
+# --- PR row ------------------------------------------------------------------
+
+ROW_WIDTH = 620
+ROW_HEIGHT = 40
+ROW_INSET = 5  # the hover highlight, like the native menu selection
+TEXT_X = 34
+
+
+class PRRowView(NSView):
+    """A two-line menu row with an Ignore button on the right. Clicking anywhere else opens the PR.
+
+    Menu items with a view get no highlight or click handling from the menu, so this does both.
+    """
+
+    @objc.python_method
+    def setup(self, on_open, on_ignore):
+        self.on_open, self.on_ignore = on_open, on_ignore
+        self.hover = False
+        self.parts = None
+        self.setAutoresizingMask_(NSViewWidthSizable)
+
+        self.led = NSImageView.imageViewWithImage_(led_image(GRAY))
+        self.led.setFrame_(NSMakeRect(TEXT_X - 18, (ROW_HEIGHT - LED_SIZE) / 2, LED_SIZE, LED_SIZE))
+        self.addSubview_(self.led)
+
+        button = NSButton.buttonWithTitle_target_action_("Ignore", self, "ignoreClicked:")
+        button.setBezelStyle_(NSBezelStyleRounded)
+        button.setControlSize_(NSControlSizeSmall)
+        button.setFont_(NSFont.systemFontOfSize_(NSFont.smallSystemFontSize()))
+        button.setRefusesFirstResponder_(True)  # no focus ring when the menu opens
+        button.sizeToFit()
+        button.setAutoresizingMask_(NSViewMinXMargin)
+        size = button.frame().size
+        right = ROW_WIDTH - 14 - size.width
+        button.setFrameOrigin_(NSMakePoint(right, (ROW_HEIGHT - size.height) / 2))
+        self.addSubview_(button)
+
+        self.lines = []
+        for y, height in ((3, 18), (21, 15)):
+            label = NSTextField.labelWithString_("")
+            label.setFrame_(NSMakeRect(TEXT_X, y, right - 6 - TEXT_X, height))
+            label.setAutoresizingMask_(NSViewWidthSizable)
+            self.addSubview_(label)
+            self.lines.append(label)
+
+        options = NSTrackingMouseEnteredAndExited | NSTrackingActiveAlways | NSTrackingInVisibleRect
+        self.addTrackingArea_(NSTrackingArea.alloc().initWithRect_options_owner_userInfo_(
+            self.bounds(), options, self, None
+        ))
+
+    @objc.python_method
+    def fill(self, idle, opened, title, detail, highlight):
+        parts = (idle, opened, title, detail, highlight)
+        if parts != self.parts:
+            self.parts = parts
+            self.led.setImage_(led_image(ORANGE if highlight else GRAY))
+            self._color_text()
+
+    @objc.python_method
+    def _color_text(self):
+        for label, text in zip(self.lines, pr_row_lines(*self.parts, selected=self.hover)):
+            label.setAttributedStringValue_(text)
+
+    @objc.python_method
+    def _set_hover(self, hover):
+        if hover != self.hover:
+            self.hover = hover
+            if self.parts:
+                self._color_text()
+            self.setNeedsDisplay_(True)
+
+    def isFlipped(self):
+        return True
+
+    def viewDidMoveToWindow(self):
+        self._set_hover(False)  # the menu closed while hovered: no mouseExited
+
+    def drawRect_(self, rect):
+        if self.hover:
+            NSColor.selectedContentBackgroundColor().set()
+            bounds = self.bounds()
+            NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+                NSMakeRect(ROW_INSET, 0, bounds.size.width - 2 * ROW_INSET, bounds.size.height), 5, 5
+            ).fill()
+
+    def hitTest_(self, point):
+        # the labels would swallow clicks; the button keeps its own
+        hit = objc.super(PRRowView, self).hitTest_(point)
+        return hit if hit is None or isinstance(hit, NSButton) else self
+
+    def mouseEntered_(self, event):
+        self._set_hover(True)
+
+    def mouseExited_(self, event):
+        self._set_hover(False)
+
+    def mouseDown_(self, event):
+        pass  # claim the click, so mouseUp_ comes here
+
+    def mouseUp_(self, event):
+        item = self.enclosingMenuItem()
+        menu = item and item.menu()
+        while menu is not None and menu.supermenu() is not None:
+            menu = menu.supermenu()
+        if menu is not None:
+            menu.cancelTracking()
+        self._set_hover(False)
+        AppHelper.callAfter(self.on_open)
+
+    def ignoreClicked_(self, sender):
+        # with the menu still open; deferred, because ignoring rebuilds the menu, and with it this view
+        AppHelper.callAfter(self.on_ignore)
+
+
+def pr_row_item(key, on_open, on_ignore):
+    # placeholder title: rumps keys items by title and skips duplicates
+    item = rumps.MenuItem(key)
+    row = PRRowView.alloc().initWithFrame_(NSMakeRect(0, 0, ROW_WIDTH, ROW_HEIGHT))
+    row.setup(on_open, on_ignore)
+    item._menuitem.setView_(row)
+    return item
 
 
 def notify(title, message):
@@ -284,6 +425,9 @@ def load_config():
     hours = config.get("attention_hours")
     if isinstance(hours, bool) or not isinstance(hours, (int, float)) or hours <= 0:
         config["attention_hours"] = DEFAULT_ATTENTION_HOURS
+    ignored = config.get("ignored")  # "owner/repo#123"
+    if not (isinstance(ignored, list) and all(isinstance(k, str) for k in ignored)):
+        config["ignored"] = []
     return config
 
 
@@ -312,7 +456,7 @@ class PRIdleApp(rumps.App):
         try:
             self.config = load_config()
         except ValueError:
-            self.config = {"repos": [], "attention_hours": DEFAULT_ATTENTION_HOURS}
+            self.config = {"repos": [], "attention_hours": DEFAULT_ATTENTION_HOURS, "ignored": []}
         self.config_mtime = config_mtime()
         self.info = {}  # repo key -> {"prs": [summarize() dicts, most idle first]} or {"error": text}
         self.attention = set()  # "owner/repo#123" of PRs idle for longer than attention_hours
@@ -323,7 +467,7 @@ class PRIdleApp(rumps.App):
         self.next_poll_at = 0
         self.rendered_minute = None
         self.menu_structure = None
-        self.pr_items = {}  # (section, "owner/repo#123") -> MenuItem
+        self.rows = {}  # (section, "owner/repo#123") -> PRRowView
         self.repo_items = {}  # repo key -> MenuItem
         self.attention_item = self.status_item = None
         self.timer = rumps.Timer(self.tick, 1)
@@ -356,14 +500,14 @@ class PRIdleApp(rumps.App):
         except ValueError:
             return  # broken hand edit: keep what we have
         before = {repo_key(r) for r in self.repos}
-        hours_before = self.config["attention_hours"]
+        hours_before, ignored_before = self.config["attention_hours"], self.config["ignored"]
         self.config = config
         keys = {repo_key(r) for r in self.repos}
         self.info = {k: v for k, v in self.info.items() if k in keys}
         if keys - before:
             self.next_poll_at = 0  # fetch new repos on the next tick
-        if self.config["attention_hours"] != hours_before:
-            self.attention = self._idle_keys()  # no notifications for a new threshold
+        if self.config["attention_hours"] != hours_before or self.config["ignored"] != ignored_before:
+            self.attention = self._idle_keys()  # no notifications for a new threshold, or PRs no longer ignored
         self._update_attention()
         self._render()
 
@@ -415,15 +559,23 @@ class PRIdleApp(rumps.App):
         # PRs that were already idle when their repo was added (or the app started) don't notify
         first = {k for k in results if "prs" not in self.info.get(k, {})}
         self.info.update({k: v for k, v in results.items() if k in current})
+        # forget ignored PRs that were merged or closed (or turned back into drafts)
+        fetched = {k for k, v in results.items() if "prs" in v}
+        still_open = set(self._open_prs())
+        self._edit_ignored(lambda keys: [k for k in keys if k.split("#")[0] not in fetched or k in still_open])
         self._update_attention(quiet=first)
         self._render()
 
     # attention
 
-    def _tracked(self):
+    def _open_prs(self):
         """Every open PR of the tracked repos, keyed by "owner/repo#123", most idle first."""
         prs = [(f'{k}#{pr["number"]}', pr) for k, info in self.info.items() for pr in info.get("prs", [])]
         return dict(sorted(prs, key=lambda item: item[1]["active"]))
+
+    def _tracked(self):
+        """The open PRs that aren't ignored, most idle first."""
+        return {k: pr for k, pr in self._open_prs().items() if k not in self.config["ignored"]}
 
     def _idle_keys(self):
         cutoff = time.time() - self.config["attention_hours"] * 3600
@@ -477,13 +629,14 @@ class PRIdleApp(rumps.App):
             len(self.attention),
             [(repo_key(r), "error" in self.info.get(repo_key(r), {}),
               [k for k in tracked if k.split("#")[0] == repo_key(r)]) for r in self.repos],
+            [k for k in self._open_prs() if k in self.config["ignored"]],
         )
         if structure != self.menu_structure:
             self.menu_structure = structure
             self._build_menu()
         now = time.time()
-        for (section, key), item in self.pr_items.items():
-            self._fill_pr_item(item, key, tracked[key], section, now)
+        for (section, key), row in self.rows.items():
+            self._fill_row(row, key, tracked[key], section, now)
         for r in self.repos:
             self._fill_repo_item(self.repo_items[repo_key(r)], r)
         if self.attention_item is not None:
@@ -494,16 +647,20 @@ class PRIdleApp(rumps.App):
         # rumps registers every MenuItem in a class-level dict and clear() doesn't drop them
         self._forget_items(self.menu)
         self.menu.clear()
-        listed, needing, repos = self.menu_structure
-        self.pr_items = {}
+        listed, needing, repos, ignored = self.menu_structure
+        prs = self._open_prs()
+        self.rows = {}
         items = []
+
+        def row(section, key):
+            item = pr_row_item(key, partial(self._open, prs[key]["url"], None), partial(self.ignore, key))
+            self.rows[section, key] = item._menuitem.view()
+            return item
 
         if needing:
             items.append(rumps.MenuItem(f"Needs attention ({needing})"))
             for key in listed:
-                # placeholder titles: rumps keys items by title and skips duplicates
-                self.pr_items["top", key] = rumps.MenuItem(key)
-                items.append(self.pr_items["top", key])
+                items.append(row("top", key))
             if needing > len(listed):
                 items.append(rumps.MenuItem(f"+{needing - len(listed)} more in the repo menus"))
             items.append(None)
@@ -517,19 +674,27 @@ class PRIdleApp(rumps.App):
             elif rk not in self.info:
                 entries.append(rumps.MenuItem("Checking…"))
             elif not keys:
-                entries.append(rumps.MenuItem("No open PRs"))
+                entries.append(rumps.MenuItem(
+                    "Only ignored PRs" if any(k.split("#")[0] == rk for k in ignored) else "No open PRs"
+                ))
             # most idle first, so the ones needing attention come first; a separator below them
             for i, key in enumerate(keys):
                 if i and (keys[i - 1] in self.attention) != (key in self.attention):
                     entries.append(None)
-                self.pr_items["repo", key] = rumps.MenuItem(key)
-                entries.append(self.pr_items["repo", key])
+                entries.append(row("repo", key))
             entries += [
                 None,
                 rumps.MenuItem("Open on GitHub", callback=partial(self._open, f"https://github.com/{rk}/pulls")),
                 rumps.MenuItem("Stop tracking", callback=partial(self.remove_repo, rk)),
             ]
             item.update(entries)
+            items.append(item)
+        if ignored:
+            item = rumps.MenuItem(f"Ignored ({len(ignored)})")
+            item.update([rumps.MenuItem("Click one to stop ignoring it")] + [
+                rumps.MenuItem(f'{key} {short(prs[key]["title"])}', callback=partial(self.unignore, key))
+                for key in ignored
+            ])
             items.append(item)
         if repos:
             items.append(None)
@@ -546,6 +711,7 @@ class PRIdleApp(rumps.App):
         items.append(self.status_item)
         items.append(rumps.MenuItem("Quit", callback=rumps.quit_application))
         self.menu.update(items)
+        self.menu._menu.update()  # grey out the headers again when this runs with the menu open
 
     @classmethod
     def _forget_items(cls, menu):
@@ -554,22 +720,21 @@ class PRIdleApp(rumps.App):
                 rumps.rumps.NSApp._ns_to_py_and_callback.pop(item._menuitem, None)
                 cls._forget_items(item)
 
-    def _fill_pr_item(self, item, key, pr, section, now):
+    def _fill_row(self, row, key, pr, section, now):
         rk = key.split("#")[0]
-        item.set_callback(partial(self._open, pr["url"]))
-        item._menuitem.setImage_(led_image(ORANGE if key in self.attention else GRAY))
-        item._menuitem.setAttributedTitle_(pr_row_title(
+        row.fill(
             duration(now - pr["active"]),
             duration(now - pr["opened"]),
             f'#{pr["number"]} {short(pr["title"])}',
             f'{rk} · {pr["author"]}' if section == "top" else pr["author"],
             key in self.attention,
-        ))
+        )
 
     def _fill_repo_item(self, item, r):
         key = repo_key(r)
         info = self.info.get(key)
-        prs = (info or {}).get("prs", [])
+        prs = [pr for pr in (info or {}).get("prs", []) if f'{key}#{pr["number"]}' not in self.config["ignored"]]
+        ignored = len((info or {}).get("prs", [])) - len(prs)
         needing = sum(1 for pr in prs if f'{key}#{pr["number"]}' in self.attention)
         if info is None:
             detail = "Checking…"
@@ -577,6 +742,7 @@ class PRIdleApp(rumps.App):
             detail = info["error"]
         else:
             detail = f"{len(prs)} open" + (f" · {needing} need attention" if needing else "")
+            detail += f" · {ignored} ignored" if ignored else ""
         item._menuitem.setImage_(led_image(ORANGE if needing else GRAY))
         item._menuitem.setSubtitle_(detail)
 
@@ -632,9 +798,29 @@ class PRIdleApp(rumps.App):
     def remove_repo(self, key, _):
         self._check_config()
         self.config["repos"] = [x for x in self.repos if repo_key(x) != key]
+        self.config["ignored"] = [k for k in self.config["ignored"] if k.split("#")[0] != key]
         self.info.pop(key, None)
         self._save_config()
         self._update_attention()
+        self._render()
+
+    def _edit_ignored(self, change):
+        """Replace the ignored list with change(list), and save it if that changed it."""
+        self._check_config()  # don't overwrite edits made outside the app
+        ignored = change(self.config["ignored"])
+        if ignored != self.config["ignored"]:
+            self.config["ignored"] = ignored
+            self._save_config()
+
+    def ignore(self, key):
+        """No attention, notification or menu row for the PR, until it's merged or closed."""
+        self._edit_ignored(lambda keys: keys if key in keys else keys + [key])
+        self._update_attention()
+        self._render()
+
+    def unignore(self, key, _):
+        self._edit_ignored(lambda keys: [k for k in keys if k != key])
+        self.attention |= self._idle_keys() & {key}  # no notification: you just put it back
         self._render()
 
     def set_attention_hours(self, _):
@@ -746,6 +932,7 @@ def cli(argv):
             missing.append(ref)
             continue
         repos.remove(match)
+        config["ignored"] = [k for k in config["ignored"] if k.split("#")[0] != repo_key(match)]
         print(f"Removed {repo_key(match)}")
     if len(missing) < len(args.repo):
         save_config(config)
