@@ -14,7 +14,7 @@ Watches GitHub pull requests from the macOS menu bar (built with [rumps](https:/
 - **Watchlist**: **Add PR…** pre-fills a PR URL from the clipboard. **Remove** drops one PR, **Remove merged/closed** all finished ones at once.
 - **Labels**: a short name next to each LED, e.g. `auth`. Type it after the URL when adding the PR, change it with **Rename**. Turn off **Show labels** for dots only.
 - **PR details**: the menu lists each PR with its title, and its state on a second line. Click it to open the PR in the browser.
-- **Notifications**: when a PR changes state, and when it gets a new unresolved review thread.
+- **Notifications**: a banner in the top-right corner when a PR changes state, and when it gets a new unresolved review thread. Click it to open the PR in the browser. It goes away after 8 seconds (not while the mouse is on it) and isn't kept in Notification Center.
 - **Refresh**: checked every 60 seconds; **Refresh now** checks right away.
 - **Command line**: add, remove and list PRs from the terminal, also while the app runs, so Claude or a script can add PRs.
 
@@ -32,7 +32,7 @@ Checked in this order; the first match wins.
 | gray | closed, not found / no access, or not checked yet |
 
 When GitHub is still computing mergeability (right after a push), the previous state is kept.
-A notification is shown whenever a PR changes state, and when a PR gets a new unresolved thread.
+A banner is shown whenever a PR changes state, and when a PR gets a new unresolved thread.
 
 ## How it works
 

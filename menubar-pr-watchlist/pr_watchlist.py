@@ -31,6 +31,8 @@ from AppKit import (
 from Foundation import NSMakePoint, NSMakeRect, NSMakeSize, NSRunLoop, NSRunLoopCommonModes
 from PyObjCTools import AppHelper
 
+import banner
+
 POLL_SECONDS = 60
 API_URL = "https://api.github.com/graphql"
 PR_RE = re.compile(r"(?:https?://github\.com/)?([\w.-]+)/([\w.-]+)(?:/pull/|#)(\d+)(?:[/?#]\S*)?")
@@ -185,14 +187,10 @@ def parse_pr(text):
     return {"owner": match.group(1), "repo": match.group(2), "number": number, "label": label}
 
 
-def notify(title, message):
-    subprocess.Popen([
-        "osascript",
-        "-e", "on run argv",
-        "-e", 'display notification (item 2 of argv) with title (item 1 of argv) sound name "Glass"',
-        "-e", "end run",
-        title, message,
-    ])
+def notify(title, message, url):
+    """A banner of the app's own that opens url when clicked: clicking an osascript notification only opens Script
+    Editor."""
+    banner.show(title, message, partial(webbrowser.open, url))
 
 
 # --- Config ------------------------------------------------------------------
@@ -342,9 +340,9 @@ class PRWatchlistApp(rumps.App):
         if not old or old["state"] in ("pending", "error"):
             return
         if state != old["state"]:
-            notify(f'{p["label"]}: {STATES[state][1]}', pr["title"])
+            notify(f'{p["label"]}: {STATES[state][1]}', pr["title"], pr["url"])
         elif state == "comments" and unresolved > old["unresolved"]:
-            notify(f'{p["label"]}: new review comment', pr["title"])
+            notify(f'{p["label"]}: new review comment', pr["title"], pr["url"])
 
     @staticmethod
     def _url(p):
