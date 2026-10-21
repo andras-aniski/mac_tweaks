@@ -15,6 +15,7 @@ Watches GitHub repos for pull requests to review, from the macOS menu bar (built
 - **Author filters**: review only certain authors' PRs, or skip some (e.g. bots). In **Settings…**: **Only PRs by** or **Skip PRs by**, one at a time: while one has logins, the other is greyed out. PRs you've already reviewed stay in view whoever wrote them.
 - **Ignore**: hides a PR you won't review. Click **Ignore** on its row; undo it from the **Ignored** submenu.
 - **Copilot review**: Copilot checks the PR in the background for acceptance criteria, alignment with the repo's docs, technical correctness, and the conventions the repo already follows in that area. Click **Review** on its row; the button shows how it's going. When it's done, a banner shows in the top-right corner: click it to open the comments, or after a failure, to retry. It goes away after 8 seconds (not while the mouse is on it) and isn't kept in Notification Center.
+- **Review any PR**: **Review a PR…** in the menu reviews a PR the menu doesn't offer, e.g. in a repo you don't track, a draft, your own, or one the author filters leave out. Paste its URL (it's filled in when the clipboard holds one). It's listed in To review with a **Remove** button, and stays until it's merged or closed, or you remove it.
 - **Comment levels**: each comment is marked `MUST-FIX`, `SHOULD-FIX`, `QUESTION`, `CONSIDER` or `NITPICK`, in the sb-fe-mfe review format. Copilot only suggests fixes it's confident about; when it's unsure, or the acceptance criteria, docs and code disagree, it asks the author a `QUESTION` instead.
 - **No tags**: Copilot never @-mentions anyone in its comments, so nobody gets notified by them, even if the PR or its comments ask for it. To allow a tag, ask for it in [`copilot/review-prompt.md`](copilot/review-prompt.md).
 - **Readable prompt**: see exactly what Copilot is told. In **Settings…**: **Review prompt…**.
@@ -41,6 +42,7 @@ stateDiagram-v2
     state "Ignored" as Ignored
 
     [*] --> ToReview: opened or marked ready
+    [*] --> ToReview: Review a PR…
     ToReview --> Ignored: Ignore
     Ignored --> ToReview: click it in Ignored
     ToReview --> ToApprove: Copilot review done
@@ -64,7 +66,7 @@ With automation on, the moves out of To review and To approve can happen by them
 - **Approved**: PRs you approved, in a submenu; click one to open it. One moves to To review when the author requests your review again, or when your approval is dismissed.
 - **Ignored**: PRs you ignored. They don't come back unless you review them. Click one in the submenu to put it back in To review.
 
-Your own PRs are left out. Merged and closed PRs drop out on the next refresh, and so do PRs turned back into drafts. When a draft is marked ready, it counts as new. Each group lists 10 PRs; the rest are in a submenu below them.
+Your own PRs are left out. PRs added with **Review a PR…** are in To review whoever wrote them, even in a repo you don't track or as a draft, until you review them on GitHub; then they move on like the others. While their Copilot review lasts, they stay in To review (or To approve). Merged and closed PRs drop out on the next refresh, and so do PRs turned back into drafts. When a draft is marked ready, it counts as new. Each group lists 10 PRs; the rest are in a submenu below them.
 
 The menu bar count is the number of PRs in To review and To approve.
 
@@ -104,6 +106,7 @@ The author lists take GitHub logins (case doesn't matter, `@` and `[bot]` are op
   - **No comments** (blue): Copilot found nothing worth a comment. Click to see its summary and the AI credits used, and to approve.
   - **Review failed** (red): click to see why, and retry.
 - **Ignore**: moves the PR to Ignored.
+- **Remove**: on a PR added with **Review a PR…**, in place of **Ignore**. Stops listing it; when it has a Copilot review, it asks first, and the review goes too, without pushing anything.
 - **Approve**: on a PR back from Reviewed, in place of **Ignore**. Approves its latest commit, after asking; it reads **Approving…** (orange) meanwhile. A Copilot review of the PR that has comments, or is still running, stays.
 - Click anywhere else on a PR row to open it in the browser.
 
@@ -176,6 +179,7 @@ Every review is logged to `history.jsonl` next to the config when it ends, and s
 
 ## Usage
 
+- **Review a PR…**: review a PR that isn't listed with a **Review** button. Paste its URL or `owner/repo#123`.
 - **Settings…**: tracked repos and everything else above.
 - Click a repo that can't be read to open it on GitHub.
 - **Refresh now**.

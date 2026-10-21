@@ -86,6 +86,7 @@ STARTUP_GRACE = 5 * 60  # nothing automatic this soon after the app starts: time
 MAX_LISTED = 10  # per group; the rest go in a submenu
 API_URL = "https://api.github.com/graphql"
 REPO_RE = re.compile(r"^(?:https?://github\.com/)?([\w.-]+)/([\w.-]+?)(?:\.git)?(?:[/?#]\S*)?$")
+PR_RE = re.compile(r"^(?:https?://github\.com/)?([\w.-]+)/([\w.-]+?)(?:/pulls?/|#)(\d+)(?:[/?#]\S*)?$")
 CONFIG_PATH = os.path.join(rumps.application_support("menubar-pr-reviewer"), "config.json")
 
 ORANGE = (1.00, 0.58, 0.00)
@@ -113,34 +114,45 @@ REVIEW_STATES = {  # my latest review -> (label, LED)
 # Pending (unsubmitted) reviews don't count. A comment review doesn't change an earlier approval or change request,
 # as on GitHub, so the last 20 are fetched; it does replace a dismissed one. Pushes = the last commit and the last force push.
 # My threads = review threads that I started (up to 100 per PR), and when they last had a reply.
-QUERY = """
+PR_FIELDS = """
+fragment PR on PullRequest {
+  number title url isDraft createdAt
+  author { login }
+  reviews(author: $me, last: 20, states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED]) {
+    nodes { state submittedAt }
+  }
+  reviewRequests(first: 50) { nodes { requestedReviewer { ... on User { login } } } }
+  reviewThreads(first: 100) {
+    nodes {
+      isResolved
+      started: comments(first: 1) { nodes { author { login } } }
+      latest: comments(last: 1) { nodes { createdAt } }
+    }
+  }
+  commits(last: 1) { nodes { commit { committedDate } } }
+  pushes: timelineItems(last: 1, itemTypes: [HEAD_REF_FORCE_PUSHED_EVENT]) {
+    nodes { ... on HeadRefForcePushedEvent { createdAt } }
+  }
+  ready: timelineItems(last: 1, itemTypes: [READY_FOR_REVIEW_EVENT]) {
+    nodes { ... on ReadyForReviewEvent { createdAt } }
+  }
+}
+"""
+QUERY = PR_FIELDS + """
 query($owner: String!, $name: String!, $after: String, $me: String!) {
   repository(owner: $owner, name: $name) {
     pullRequests(states: OPEN, first: 50, after: $after) {
       pageInfo { hasNextPage endCursor }
-      nodes {
-        number title url isDraft createdAt
-        author { login }
-        reviews(author: $me, last: 20, states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED]) {
-          nodes { state submittedAt }
-        }
-        reviewRequests(first: 50) { nodes { requestedReviewer { ... on User { login } } } }
-        reviewThreads(first: 100) {
-          nodes {
-            isResolved
-            started: comments(first: 1) { nodes { author { login } } }
-            latest: comments(last: 1) { nodes { createdAt } }
-          }
-        }
-        commits(last: 1) { nodes { commit { committedDate } } }
-        pushes: timelineItems(last: 1, itemTypes: [HEAD_REF_FORCE_PUSHED_EVENT]) {
-          nodes { ... on HeadRefForcePushedEvent { createdAt } }
-        }
-        ready: timelineItems(last: 1, itemTypes: [READY_FOR_REVIEW_EVENT]) {
-          nodes { ... on ReadyForReviewEvent { createdAt } }
-        }
-      }
+      nodes { ...PR }
     }
+  }
+}
+"""
+# one PR, for the ones reviewed from "Review a PR…": drafts too, and any repo
+PR_QUERY = PR_FIELDS + """
+query($owner: String!, $name: String!, $number: Int!, $me: String!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) { state ...PR }
   }
 }
 """
@@ -803,6 +815,14 @@ def fetch_repo(r, me, token):
         after = page["pageInfo"]["endCursor"]
 
 
+def fetch_pr(key, me, token):
+    """One PR, drafts too; None if it isn't found or isn't open."""
+    owner, name, number = copilot_review.split_key(key)
+    data = graphql(PR_QUERY, {"owner": owner, "name": name, "number": number, "me": me}, token)
+    pr = (data.get("repository") or {}).get("pullRequest")
+    return summarize(pr, me) if pr and pr["state"] == "OPEN" else None
+
+
 def summarize(pr, me):
     reviews = [r for r in pr["reviews"]["nodes"] if r["submittedAt"]]
     state = None
@@ -861,6 +881,12 @@ def parse_repo(text):
     """A repo URL (any page in it) or owner/repo; None if it isn't one."""
     match = REPO_RE.match(text.strip())
     return match and {"owner": match.group(1), "repo": match.group(2)}
+
+
+def parse_pr(text):
+    """A PR URL (any page of it) or owner/repo#123, as "owner/repo#123"; None if it isn't one."""
+    match = PR_RE.match(text.strip())
+    return match and f"{match.group(1)}/{match.group(2)}#{int(match.group(3))}"
 
 
 def parse_logins(text):
@@ -1052,6 +1078,8 @@ def load_state():
     return {
         "known": state.get("known") if isinstance(state.get("known"), dict) else {},  # repo -> PR numbers seen
         "ignored": state.get("ignored") if isinstance(state.get("ignored"), list) else [],  # "owner/repo#123"
+        # PRs reviewed from "Review a PR…" that the tracked repos don't list: other repos, drafts, my own, filtered
+        "custom": state.get("custom") if isinstance(state.get("custom"), list) else [],
         # key -> Copilot review: {"status": preparing|running|done|failed, "session", "started", "pid", "head",
         #                         "model", "effort", "context", "comments", "credits", "error"}
         "reviews": state.get("reviews") if isinstance(state.get("reviews"), dict) else {},
@@ -1104,6 +1132,7 @@ class PRReviewerApp(rumps.App):
         self.models = []  # what Copilot CLI offers, for Settings; fetched when Settings opens
         self.windows = {}  # key -> ReviewWindow
         self.info = {}  # repo key -> {"prs": [summarize() dicts]} or {"error": text}
+        self.custom_prs = {}  # key -> summarize() of a PR in state["custom"], once fetched
         self.back = set()  # keys of reviewed PRs that are back in To review
         self.token = self.login = None
         self.busy = False
@@ -1159,14 +1188,15 @@ class PRReviewerApp(rumps.App):
 
     def _forget_untracked(self):
         keys = {repo_key(r) for r in self.repos}
+        custom = set(self.state["custom"])
         self.info = {k: v for k, v in self.info.items() if k in keys}
-        self.back = {k for k in self.back if k.split("#")[0] in keys}
+        self.back = {k for k in self.back if k.split("#")[0] in keys or k in custom}
         self.state["known"] = {k: v for k, v in self.state["known"].items() if k in keys}
         self.state["ignored"] = [k for k in self.state["ignored"] if k.split("#")[0] in keys]
         self.state["reviewed_activity"] = {
-            k: v for k, v in self.state["reviewed_activity"].items() if k.split("#")[0] in keys
+            k: v for k, v in self.state["reviewed_activity"].items() if k.split("#")[0] in keys or k in custom
         }
-        for key in [k for k in self.state["reviews"] if k.split("#")[0] not in keys]:
+        for key in [k for k in self.state["reviews"] if k.split("#")[0] not in keys and k not in custom]:
             self._drop_review(key)
         self._save_state()
 
@@ -1187,31 +1217,38 @@ class PRReviewerApp(rumps.App):
             self._render_status()
 
     def poll(self, _=None):
-        if self.busy or not self.repos:
+        if self.busy or not (self.repos or self.state["custom"]):
             return
         self.busy = True
         self.next_poll_at = time.time() + self.config["poll_minutes"] * 60
         snapshot = list(self.repos)
-        threading.Thread(target=self._poll_worker, args=(snapshot,), daemon=True).start()
+        threading.Thread(target=self._poll_worker, args=(snapshot, list(self.state["custom"])), daemon=True).start()
 
-    def _poll_worker(self, snapshot):
-        results, error = {}, None
+    def _poll_worker(self, snapshot, custom=()):
+        results, custom_results, error = {}, {}, None
         try:
-            if not self.token:
-                self.token = gh_token()
-                self.login = graphql("{ viewer { login } }", {}, self.token)["viewer"]["login"]
+            self._sign_in()
             for r in snapshot:
                 prs = fetch_repo(r, self.login, self.token)
                 results[repo_key(r)] = {"error": "Not found or no access"} if prs is None else {"prs": prs}
+            for key in custom:
+                custom_results[key] = fetch_pr(key, self.login, self.token)
         except urllib.error.HTTPError as e:
             if e.code == 401:
                 self.token = None  # refetch from gh next time
             error = http_error_text(e)
         except Exception as e:
             error = str(e)
-        AppHelper.callAfter(self._apply, results, error)
+        AppHelper.callAfter(self._apply, results, error, custom_results)
 
-    def _apply(self, results, error):
+    def _sign_in(self):
+        """Get the token and my login, if they aren't there yet. On a background thread: it runs gh."""
+        if not self.token:
+            self.token = gh_token()
+            self.login = graphql("{ viewer { login } }", {}, self.token)["viewer"]["login"]
+
+    def _apply(self, results, error, custom=None):
+        """custom: key -> the PR of a key in state["custom"], or None once it's merged, closed or gone."""
         self.busy = False
         self.error = error
         if error:
@@ -1240,8 +1277,16 @@ class PRReviewerApp(rumps.App):
             self.state["reviewed_activity"] = {
                 k: v for k, v in self.state["reviewed_activity"].items() if k.split("#")[0] != rk or k in still_open
             }
-            for key in [k for k in self.state["reviews"] if k.split("#")[0] == rk and k not in still_open]:
+            for key in [k for k in self.state["reviews"] if k.split("#")[0] == rk and k not in still_open
+                        and k not in self.state["custom"]]:  # those go by their own result: e.g. a draft
                 self._drop_review(key)
+        for key, pr in (custom or {}).items():
+            if key not in self.state["custom"]:
+                continue  # removed meanwhile
+            if pr is None:
+                self._forget_custom(key)
+            else:
+                self.custom_prs[key] = pr
         self._save_state()
 
         to_review = self._groups()[0]
@@ -1259,8 +1304,10 @@ class PRReviewerApp(rumps.App):
     # groups
 
     def _tracked(self):
-        """Every open, non-draft PR of the tracked repos, keyed by "owner/repo#123"."""
-        return {f'{k}#{pr["number"]}': pr for k, info in self.info.items() for pr in info.get("prs", [])}
+        """Every open, non-draft PR of the tracked repos, and the ones reviewed from "Review a PR…", keyed by
+        "owner/repo#123"."""
+        listed = {f'{k}#{pr["number"]}': pr for k, info in self.info.items() for pr in info.get("prs", [])}
+        return {**listed, **self.custom_prs}
 
     def _groups(self):
         """(to review, reviewed, ignored, approved), each {key: PR} in menu order.
@@ -1271,17 +1318,22 @@ class PRReviewerApp(rumps.App):
         To review: PRs waiting on me. Those I reviewed come back when back_to_review() says so, e.g. my approval
         was dismissed.
         To review / ignored: the rest, by authors that pass the allow and block lists. My own PRs are in none.
+        PRs reviewed from "Review a PR…" are in To review whoever wrote them, while their Copilot review lasts and
+        until I review them on GitHub.
         """
         to_review, reviewed, ignored, approved = [], [], [], []
         for key, pr in self._tracked().items():
-            if self.login and same_login(pr["author"]) == same_login(self.login):
+            custom = key in self.state["custom"]
+            if self._mine(pr) and not custom:
                 continue
-            if back_to_review(pr):
+            if back_to_review(pr) or (custom and key in self.state["reviews"]):
                 to_review.append((key, pr))
             elif pr["review"] and pr["review"]["state"] == "APPROVED":
                 approved.append((key, pr))
             elif pr["review"]:
                 reviewed.append((key, pr))
+            elif custom:
+                to_review.append((key, pr))
             elif not author_ok(pr["author"], self.config):
                 continue
             elif key in self.state["ignored"]:
@@ -1289,16 +1341,20 @@ class PRReviewerApp(rumps.App):
             else:
                 to_review.append((key, pr))
         # the ones back from Reviewed first, then the newest ready for review
-        to_review.sort(key=lambda item: (not item[1]["review"], -item[1]["ready"]))
+        to_review.sort(key=lambda item: (not back_to_review(item[1]), -item[1]["ready"]))
         ignored.sort(key=lambda item: -item[1]["ready"])
         reviewed.sort(key=lambda item: -item[1]["review"]["at"])
         approved.sort(key=lambda item: -item[1]["review"]["at"])
         return dict(to_review), dict(reviewed), dict(ignored), dict(approved)
 
+    def _mine(self, pr):
+        return bool(self.login) and same_login(pr["author"]) == same_login(self.login)
+
     def _notify_back(self, quiet=()):
         """Notify about PRs I reviewed that are back in To review."""
         to_review = self._groups()[0]
-        back = {key: back_to_review(pr) for key, pr in to_review.items() if pr["review"]}
+        back = {key: back_to_review(pr) for key, pr in to_review.items()}
+        back = {key: why for key, why in back.items() if why}
         new = sorted(k for k in back.keys() - self.back if k.split("#")[0] not in quiet)
         self.back = set(back)
         if len(new) == 1:
@@ -1379,7 +1435,8 @@ class PRReviewerApp(rumps.App):
         structure = (
             [key for key in to_review if key not in done],
             [key for key in to_review if key in done],
-            [key for key in to_review if tracked[key]["review"]],  # back from Reviewed: Approve, not Ignore
+            [key for key in to_review if back_to_review(tracked[key])],  # back from Reviewed: Approve, not Ignore
+            list(self.state["custom"]),  # Remove, not Ignore
             list(reviewed),
             list(ignored),
             list(approved),
@@ -1403,14 +1460,19 @@ class PRReviewerApp(rumps.App):
         # rumps registers every MenuItem in a class-level dict and clear() doesn't drop them
         self._forget_items(self.menu)
         self.menu.clear()
-        to_review, to_approve, back, reviewed, ignored, approved, repos = self.menu_structure
+        to_review, to_approve, back, custom, reviewed, ignored, approved, repos = self.menu_structure
         self.rows = {}
         items = []
 
         def rows(keys, buttons, back=()):
             def row(key):
                 # it's been reviewed: no ignoring, but approving once my comments are addressed
-                own = [buttons[0], ("Approve", self.approve)] if key in back else buttons
+                if key in back:
+                    own = [buttons[0], ("Approve", self.approve)]
+                elif key in custom:
+                    own = [buttons[0], ("Remove", self.remove_custom)]
+                else:
+                    own = buttons
                 item = pr_row_item(key, partial(self._open_pr, key), [
                     (title, partial(callback, key)) for title, callback in own
                 ])
@@ -1424,7 +1486,7 @@ class PRReviewerApp(rumps.App):
                 items.append(more)
             items.append(None)
 
-        if repos:
+        if repos or to_review:
             items.append(rumps.MenuItem(f"To review ({len(to_review)})" if to_review else "Nothing to review"))
             rows(to_review, [("Review", self.review), ("Ignore", self.ignore)], back)
         if to_approve:
@@ -1461,8 +1523,9 @@ class PRReviewerApp(rumps.App):
             items.append(None)
 
         self.stats_item = rumps.MenuItem("Review statistics…", callback=self.show_stats)
-        if repos:
+        if repos or custom:
             items.append(rumps.MenuItem("Refresh now", callback=self.refresh))
+        items.append(rumps.MenuItem("Review a PR…", callback=self.review_pr))
         items.append(self.stats_item)
         self.settings_item = rumps.MenuItem("Settings…", callback=self.show_settings)
         if not repos:
@@ -1488,7 +1551,7 @@ class PRReviewerApp(rumps.App):
         detail = [(f'{key.split("#")[0]} · {pr["author"]} · ', None)]
         job = self.state["reviews"].get(key)
         row.set_button(0, *self._review_button(job, self._budget_used_up()))
-        if not reviewed and not pr["review"]:
+        if not reviewed and not back_to_review(pr):
             if job:  # room for the review's status
                 detail[-1] = (detail[-1][0].removesuffix(" · "), None)
             else:
@@ -1579,7 +1642,7 @@ class PRReviewerApp(rumps.App):
     def _render_status(self):
         if self.status_item is None:
             return
-        if not self.repos:
+        if not (self.repos or self.state["custom"]):
             text = "No repos tracked"
         elif self.busy or not (self.updated_at or self.error):
             text = "Updating…"
@@ -1748,7 +1811,7 @@ class PRReviewerApp(rumps.App):
                 continue  # new commits since the review started: leave it to me
             if job["comments"] and automation["push"] and job.get("auto"):
                 self._auto_act(key, "push")
-            elif not job["comments"] and automation["approve"] and key in to_review:
+            elif not job["comments"] and automation["approve"] and key in to_review and not self._mine(pr):
                 self._auto_act(key, "approve")
 
     def _auto_act(self, key, action):
@@ -2097,6 +2160,76 @@ class PRReviewerApp(rumps.App):
 
     def refresh(self, _):
         self.poll()
+
+    # PRs from "Review a PR…"
+
+    def review_pr(self, _):
+        """Review any PR, e.g. one in a repo I don't track, a draft, or one that the author lists leave out."""
+        clip = (NSPasteboard.generalPasteboard().stringForType_(NSPasteboardTypeString) or "").strip()
+        response = rumps.Window(
+            "Paste its URL, or owner/repo#123.", "Review a PR", default_text=clip if parse_pr(clip) else "",
+            ok="Review", cancel="Cancel", dimensions=(360, 24),
+        ).run()
+        if response.clicked != 1:
+            return
+        key = parse_pr(response.text)
+        if not key:
+            rumps.alert("Not a PR", "Expected e.g. https://github.com/owner/repo/pull/123")
+            return
+        threading.Thread(target=self._fetch_pr_worker, args=(key,), daemon=True).start()
+
+    def _fetch_pr_worker(self, key):
+        pr, error = None, None
+        try:
+            self._sign_in()
+            pr = fetch_pr(key, self.login, self.token)
+        except urllib.error.HTTPError as e:
+            error = http_error_text(e)
+        except Exception as e:
+            error = str(e)
+        AppHelper.callAfter(self._got_pr, key, pr, error)
+
+    def _got_pr(self, key, pr, error):
+        if error or pr is None:
+            rumps.alert(f"Can't review {key}", error or "It isn't open, or it can't be found.")
+            return
+        key = parse_pr(pr["url"])  # as GitHub spells it
+        key = next((k for k in self._tracked() if k.lower() == key.lower()), key)  # or as the menu does
+        if key in self.state["reviews"]:
+            self._review_dialog(key)  # stop it, open its comments, or retry
+            return
+        if self._over_budget():
+            self._budget_alert()
+            return
+        to_review, reviewed = self._groups()[:2]
+        if key not in to_review and key not in reviewed and key not in self.state["custom"]:
+            self.state["custom"].append(key)  # not listed with a Review button: list it in To review
+        if key in self.state["custom"]:
+            self.custom_prs[key] = pr
+        self._start_review(key)
+
+    def remove_custom(self, key):
+        """The Remove button of a PR from "Review a PR…": takes its Copilot review along, after asking."""
+        if key in self.state["reviews"]:
+            return partial(self._confirm_remove_custom, key)
+        self._forget_custom(key)
+        self._save_state()
+        self._render()
+
+    def _confirm_remove_custom(self, key):
+        if rumps.alert(f"Remove {key}?", "Its Copilot review is stopped or deleted too. Nothing is pushed.",
+                       ok="Remove", cancel="Cancel") == 1:
+            self._forget_custom(key)
+            self._save_state()
+            self._render()
+
+    def _forget_custom(self, key):
+        """Stop listing a PR from "Review a PR…", and drop its review. The caller saves the state."""
+        self.state["custom"] = [k for k in self.state["custom"] if k != key]
+        self.custom_prs.pop(key, None)
+        self.state["reviewed_activity"].pop(key, None)
+        if key in self.state["reviews"]:
+            self._drop_review(key)
 
     def show_settings(self, _=None, focus=None):
         if self.settings_window is None:
