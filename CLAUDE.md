@@ -59,6 +59,7 @@ menubar-pr-watchlist/.venv/bin/python scripts/shoot.py menubar-pr-watchlist pr_w
 - The status item exists only after `run()`; hook `rumps.events.before_start`.
 - Network or other slow work goes on a thread; hand results back with `AppHelper.callAfter`, because AppKit isn't thread-safe.
 - `rumps.notification` fails when run from a venv (no bundle identifier). Use `osascript` with the text passed as `argv` to avoid quoting problems.
+- A rumps app has no main menu, so ⌘C/⌘V/⌘X/⌘A/⌘Z do nothing in its text fields and dialogs. Each tool calls `install_edit_menu()` at start; copy it into a new tool.
 - `NSMenuItem.setSubtitle_` (macOS 14+) gives a native second line in menu items.
 - Views in menu items (rows with buttons, see `menubar-pr-reviewer`): the menu gives them no highlight or clicks, so the view handles both. `AppHelper.callAfter` runs while a menu is open; use it to act on a button without closing the menu, and never rebuild the menu inside the button's own action. After rebuilding an open menu, call `menu._menu.update()` so items without an action turn grey again. `bezelColor` is ignored in menus: colour the button's `attributedTitle` instead.
 - Tooltip rects don't retain their owner: a Python `str` owner is freed and crashes the app on hover. Make the view the owner and implement `view_stringForToolTip_point_userData_`.
