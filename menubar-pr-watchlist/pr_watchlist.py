@@ -23,6 +23,8 @@ from AppKit import (
     NSFontAttributeName,
     NSGradient,
     NSImage,
+    NSMenu,
+    NSMenuItem,
     NSMutableAttributedString,
     NSPasteboard,
     NSPasteboardTypeString,
@@ -242,6 +244,23 @@ def config_mtime():
         return None
 
 
+def install_edit_menu():
+    """Give the app a main menu with an Edit menu. A menu bar app shows none, but without one ⌘C, ⌘V, ⌘X, ⌘A and ⌘Z
+    do nothing in its text fields: AppKit finds those shortcuts through the main menu."""
+    edit = NSMenu.alloc().initWithTitle_("Edit")
+    for title, action, key in (("Undo", "undo:", "z"), ("Redo", "redo:", "Z"), (None, None, None), ("Cut", "cut:", "x"),
+                               ("Copy", "copy:", "c"), ("Paste", "paste:", "v"), ("Select All", "selectAll:", "a")):
+        if title is None:
+            edit.addItem_(NSMenuItem.separatorItem())
+        else:  # no target: the action goes to the focused field
+            edit.addItemWithTitle_action_keyEquivalent_(title, action, key)
+    item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("Edit", None, "")
+    item.setSubmenu_(edit)
+    main = NSMenu.alloc().initWithTitle_("")
+    main.addItem_(item)
+    NSApplication.sharedApplication().setMainMenu_(main)
+
+
 # --- App ---------------------------------------------------------------------
 
 class PRWatchlistApp(rumps.App):
@@ -273,6 +292,7 @@ class PRWatchlistApp(rumps.App):
         return self.config["prs"]
 
     def _on_start(self):
+        install_edit_menu()
         self._render()
         # keep ticking while the menu is open, so the countdown stays live and LEDs keep blinking
         for timer in (self.timer, self.blink_timer):
