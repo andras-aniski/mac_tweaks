@@ -1,6 +1,23 @@
 import rumps
 import os
-from AppKit import NSApplication, NSApplicationActivationPolicyAccessory
+from AppKit import NSApplication, NSApplicationActivationPolicyAccessory, NSMenu, NSMenuItem
+
+
+def install_edit_menu():
+    """Give the app a main menu with an Edit menu. A menu bar app shows none, but without one ⌘C, ⌘V, ⌘X, ⌘A and ⌘Z
+    do nothing in its text fields: AppKit finds those shortcuts through the main menu."""
+    edit = NSMenu.alloc().initWithTitle_("Edit")
+    for title, action, key in (("Undo", "undo:", "z"), ("Redo", "redo:", "Z"), (None, None, None), ("Cut", "cut:", "x"),
+                               ("Copy", "copy:", "c"), ("Paste", "paste:", "v"), ("Select All", "selectAll:", "a")):
+        if title is None:
+            edit.addItem_(NSMenuItem.separatorItem())
+        else:  # no target: the action goes to the focused field
+            edit.addItemWithTitle_action_keyEquivalent_(title, action, key)
+    item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("Edit", None, "")
+    item.setSubmenu_(edit)
+    main = NSMenu.alloc().initWithTitle_("")
+    main.addItem_(item)
+    NSApplication.sharedApplication().setMainMenu_(main)
 
 
 class TimerApp(rumps.App):
@@ -8,6 +25,7 @@ class TimerApp(rumps.App):
         super().__init__("⏳", quit_button="Quit")
         # Menu bar only: no Dock icon.
         NSApplication.sharedApplication().setActivationPolicy_(NSApplicationActivationPolicyAccessory)
+        install_edit_menu()
         self.remaining = 0
         self.timer = rumps.Timer(self.tick, 1)
         self.menu = [
