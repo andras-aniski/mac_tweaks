@@ -1751,16 +1751,6 @@ class PRReviewerApp(rumps.App):
         self._render()
         threading.Thread(target=self._review_worker, args=(key, session, options), daemon=True).start()
 
-    def _review_cap(self):
-        """--max-ai-credits for a new review: the configured cap, lowered to what's left of the monthly budget.
-        Copilot's minimum is 30, so the budget can be overshot by up to that."""
-        caps = [self.config.get("copilot_max_ai_credits")]
-        budget = self.config.get("monthly_budget")
-        if budget is not None:
-            caps.append(max(30, int(budget - self._month_spent()) + 1))
-        caps = [c for c in caps if c]
-        return min(caps) if caps else None
-
     def _review_worker(self, key, session, options):
         """options: start()'s model, effort and context."""
         workdir = review_dir(key)
@@ -1769,8 +1759,9 @@ class PRReviewerApp(rumps.App):
             shutil.rmtree(workdir, ignore_errors=True)
             os.makedirs(workdir)
             meta = copilot_review.prepare(key, workdir, clones_dir(), token)
+            # the budget only keeps reviews from starting: one cut off by it would leave no result to show
             proc = copilot_review.start(key, workdir, session, meta["base"], **options,
-                                        max_ai_credits=self._review_cap())
+                                        max_ai_credits=self.config.get("copilot_max_ai_credits"))
         except urllib.error.HTTPError as e:
             AppHelper.callAfter(self._review_failed, key, session, http_error_text(e))
             return

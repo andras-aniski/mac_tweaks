@@ -325,9 +325,12 @@ def read_result(workdir):
         with open(os.path.join(workdir, "result.json")) as f:
             result = json.load(f)
     except FileNotFoundError:
-        said = last_message(workdir)
-        raise RuntimeError("Copilot finished without writing a result" + (f". It said: {said}" if said else "")
-                           + f"\n\nLog: {workdir}/copilot.log") from None
+        error, said = why_no_result(workdir)
+        if error:
+            text = f"Copilot stopped before writing a result: {error}"
+        else:
+            text = "Copilot finished without writing a result" + (f". It said: {said}" if said else "")
+        raise RuntimeError(f"{text}\n\nLog: {workdir}/copilot.log") from None
     except ValueError as e:
         raise RuntimeError(f"Copilot wrote an invalid result.json: {e}") from None
     comments = []
@@ -364,9 +367,10 @@ def comment_text(comment, location=False):
     return f'{heading}\n\n{where}{comment["body"]}'
 
 
-def last_message(workdir):
-    """Copilot's last words in the run's JSONL output, e.g. why it gave up; None if it said nothing."""
-    said = None
+def why_no_result(workdir):
+    """(the error that stopped the session, the orchestrator's last words) from the run's JSONL output; each None if
+    there's none. A subagent's words aren't the orchestrator's: they're its report, e.g. its findings."""
+    error = said = None
     try:
         with open(os.path.join(workdir, "copilot.log"), errors="ignore") as f:
             for line in f:
@@ -374,11 +378,17 @@ def last_message(workdir):
                     event = json.loads(line)
                 except ValueError:
                     continue
-                if event.get("type") == "assistant.message" and (event.get("data") or {}).get("content"):
-                    said = event["data"]["content"].strip()
+                data = event.get("data") or {}
+                if event.get("type") == "session.error" and data.get("message"):
+                    error = data["message"].strip()
+                    if data.get("errorCode") == "ai_credit_soft_cap_exhausted":
+                        error += ' The cap per review is "copilot_max_ai_credits" in the config.'
+                elif event.get("type") == "assistant.message" and data.get("content") and not (
+                        data.get("parentToolCallId") or event.get("agentId")):
+                    said = data["content"].strip()
     except FileNotFoundError:
         pass
-    return said[:600] if said else None
+    return error, said[:600] if said else None
 
 
 def _events(session_id):

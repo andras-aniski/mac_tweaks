@@ -65,6 +65,24 @@ def test_read_result_explains_a_missing_result(tmp_path):
         cr.read_result(str(tmp_path))
 
 
+def test_a_missing_result_shows_why_the_session_stopped_not_a_subagents_report(tmp_path):
+    events = [
+        {"type": "assistant.message", "data": {"content": "Waiting for the four reviewers to finish."}},
+        {"type": "assistant.message", "agentId": "a1",
+         "data": {"content": '```json\n{"findings": []}\n```', "parentToolCallId": "toolu_1"}},
+        {"type": "session.error", "data": {"errorType": "session_limits", "errorCode": "ai_credit_soft_cap_exhausted",
+                                           "message": "Session limit reached (95.89/60 AI credits used)."}},
+    ]
+    (tmp_path / "copilot.log").write_text("".join(json.dumps(e) + "\n" for e in events))
+    with pytest.raises(RuntimeError) as e:
+        cr.read_result(str(tmp_path))
+    assert str(e.value).startswith("Copilot stopped before writing a result: Session limit reached (95.89/60")
+    assert "findings" not in str(e.value) and "copilot_max_ai_credits" in str(e.value)
+    (tmp_path / "copilot.log").write_text("".join(json.dumps(e) + "\n" for e in events[:2]))
+    with pytest.raises(RuntimeError, match="It said: Waiting for the four reviewers"):
+        cr.read_result(str(tmp_path))
+
+
 def test_duplicates_are_recognised():
     existing = [{"author": "bob", "path": "src/a.ts", "line": 11, "body": "This  should handle the NULL case."}]
     assert cr.already_on_pr(comment(body="this should handle the null case", title=""), existing)

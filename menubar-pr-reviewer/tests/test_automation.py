@@ -169,17 +169,19 @@ def test_nothing_automatic_when_the_pr_moved_on(app, github, notes):
     assert notes.count(f"Couldn't approve {key(2)} automatically") == 1
 
 
-def test_review_cap_follows_the_budget(app, monkeypatch):
-    for budget, spent, cap, expected in [(None, 10, None, None), (100, 45, None, 56), (100, 85, None, 30),
-                                         (100, 45, 40, 40), (None, 0, 60, 60)]:
-        app.config.pop("monthly_budget", None)
-        app.config.pop("copilot_max_ai_credits", None)
-        if budget:
-            app.config["monthly_budget"] = budget
-        if cap:
-            app.config["copilot_max_ai_credits"] = cap
-        monkeypatch.setattr(app, "_month_spent", lambda spent=spent: spent)
-        assert app._review_cap() == expected, (budget, spent, cap)
+def test_the_budget_doesnt_cap_a_review_that_starts(app, monkeypatch):
+    """A review cut off by the budget would leave nothing to show for the credits it used."""
+    started = []
+    monkeypatch.setattr(m.copilot_review, "prepare", lambda key, workdir, clones, token: {"base": "main"})
+    monkeypatch.setattr(m.copilot_review, "start", lambda *a, **kw: started.append(kw["max_ai_credits"]) or None)
+    monkeypatch.setattr(app, "_review_started", lambda *a: None)
+    monkeypatch.setattr(app, "_month_spent", lambda: 95)
+    app.config["monthly_budget"] = 100
+    load(app, make_pr(1))
+    app._start_review(key(1))
+    app.config["copilot_max_ai_credits"] = 40
+    app._start_review(key(1))
+    assert started == [None, 40]
 
 
 def test_a_review_notification_opens_the_review(app, monkeypatch):
