@@ -84,6 +84,8 @@ AUTOMATION_DEFAULTS = {"wait_minutes": 30, "review": False, "push": False, "appr
 REVIEW_DEFAULTS = {"copilot_effort": "medium", "copilot_context": "long_context"}  # what reviews run with
 REVIEW_CHOICES = {"copilot_effort": copilot_review.EFFORTS, "copilot_context": copilot_review.CONTEXTS}
 RETRY_SECONDS = 120
+SUBMITTED_SECONDS = 10 * 60  # how long a review I submitted overrides GitHub's data that doesn't have it yet
+CLOCK_SKEW = 60  # between this Mac and GitHub
 STARTUP_GRACE = 5 * 60  # nothing automatic this soon after the app starts: time to see what's due
 MAX_LISTED = 10  # per group; the rest go in a submenu
 API_URL = "https://api.github.com/graphql"
@@ -956,6 +958,23 @@ def back_to_review(pr):
     return None
 
 
+def submit_review(pr, state, at):
+    """Update pr as if I had just submitted a review ("APPROVED" or "COMMENTED") at that time, the way summarize()
+    sees it on the next poll."""
+    old = (pr["review"] or {}).get("state")
+    if state == "COMMENTED" and old not in (None, "COMMENTED", "DISMISSED"):
+        state = old  # a comment review doesn't override an approval or a change request
+    pr["review"] = {"state": state, "at": at}
+    pr["requested"] = False  # GitHub drops you from the requests when you submit a review
+
+
+def has_review(pr, state, at):
+    """Whether GitHub's data on pr has the review I submitted at that time. Right after it's submitted, GitHub can
+    still return the PR without it, or with my review still requested."""
+    review = pr["review"]
+    return bool(review) and review["state"] == state and review["at"] >= at - CLOCK_SKEW and not pr["requested"]
+
+
 def new_commits(pr, job):
     """Whether the PR got commits after its Copilot review started: the review is of an older head."""
     return pr["pushed"] > job["started"]
@@ -1153,6 +1172,7 @@ class PRReviewerApp(rumps.App):
         self.info = {}  # repo key -> {"prs": [summarize() dicts]} or {"error": text}
         self.custom_prs = {}  # key -> summarize() of a PR in state["custom"], once fetched
         self.back = set()  # keys of reviewed PRs that are back in To review
+        self.submitted = {}  # key -> (state, time) of a review I just submitted, till GitHub's data has it
         self.token = self.login = None
         self.busy = False
         self.error = None
@@ -1307,6 +1327,14 @@ class PRReviewerApp(rumps.App):
                 self._forget_custom(key)
             else:
                 self.custom_prs[key] = pr
+        # a review I submitted, till GitHub's data has it
+        tracked = self._tracked()
+        for k, (state, at) in list(self.submitted.items()):
+            pr = tracked.get(k)
+            if time.time() - at > SUBMITTED_SECONDS or (pr and has_review(pr, state, at)):
+                del self.submitted[k]
+            elif pr:
+                submit_review(pr, state, at)
         self._save_state()
 
         to_review = self._groups()[0]
@@ -1366,6 +1394,15 @@ class PRReviewerApp(rumps.App):
         reviewed.sort(key=lambda item: -item[1]["review"]["at"])
         approved.sort(key=lambda item: -item[1]["review"]["at"])
         return dict(to_review), dict(reviewed), dict(ignored), dict(approved)
+
+    def _submitted(self, key, state):
+        """I submitted a review: move the PR to its group now, not once the poll that follows is in."""
+        now = time.time()
+        pr = self._tracked().get(key)
+        if pr:
+            submit_review(pr, state, now)
+            state = pr["review"]["state"]  # e.g. still approved, after comments pushed right after approving
+        self.submitted[key] = (state, now)
 
     def _mine(self, pr):
         return bool(self.login) and same_login(pr["author"]) == same_login(self.login)
@@ -2025,9 +2062,11 @@ class PRReviewerApp(rumps.App):
         if skipped:
             message += f", left out {skipped} already on the PR"
         notify(f"Review of {key} pushed" + (" automatically" if auto else ""), message)
+        if posted or summary:
+            self._submitted(key, "COMMENTED")
         self._drop_review(key)
         self._save_state()
-        self.next_poll_at = 0  # the PR moves to Reviewed
+        self.next_poll_at = 0  # the rest of what changed on GitHub
         self._render()
 
     def _approve(self, key, unpushed, latest=False):
@@ -2127,6 +2166,7 @@ class PRReviewerApp(rumps.App):
         self.approving.discard(key)
         history.append(history_path(), {"event": "approve", "key": key, "auto": auto})
         notify(f"Approved {key}" + (" automatically" if auto else ""), self._tracked().get(key, {}).get("title", ""))
+        self._submitted(key, "APPROVED")
         if unpushed:  # keep the window, to push or discard the comments
             window = self.windows.get(key)
             if window:
@@ -2134,7 +2174,7 @@ class PRReviewerApp(rumps.App):
         elif not keep_review:
             self._drop_review(key)
             self._save_state()
-        self.next_poll_at = 0  # the PR moves to Reviewed, as approved
+        self.next_poll_at = 0  # the rest of what changed on GitHub
         self._render()
 
     def show_prompt(self, _):

@@ -164,3 +164,57 @@ def test_a_review_of_an_older_head_says_so(app):
     assert (" · new commits", m.AMBER) in app._review_detail(job, pr, NOW)
     job["started"] = NOW - HOUR / 2  # after the last push
     assert (" · new commits", m.AMBER) not in app._review_detail(job, pr, NOW)
+
+
+def test_approving_moves_the_pr_right_away(app):
+    """Not only once the poll that follows is in: till then it showed in To review."""
+    load(app, make_pr(1), make_pr(2))
+    app._approved(key(1), 0)
+    assert groups(app)["to review"] == [2] and groups(app)["approved"] == [1]
+
+
+@pytest.mark.parametrize("pr", [{}, {"review": "COMMENTED", "requested": True},
+                                {"review": "CHANGES_REQUESTED", "threads": (1, 1), "pushed_h": 1}],
+                         ids=["not reviewed", "review requested again", "changes requested, all resolved"])
+def test_pushing_comments_moves_the_pr_right_away(app, pr):
+    load(app, make_pr(1, **pr))
+    app._pushed(key(1), 2, 0)
+    assert groups(app)["reviewed"] == [1]
+    assert app._tracked()[key(1)]["review"]["state"] == pr.get("review", "COMMENTED")
+
+
+def test_pushing_nothing_new_doesnt_move_it(app):
+    load(app, make_pr(1))
+    app._pushed(key(1), 0, 2)  # all of them were already on the PR
+    assert groups(app)["to review"] == [1]
+
+
+def test_it_stays_approved_till_githubs_data_has_the_approval(app):
+    """Right after approving, GitHub can still return the PR without the approval, or with my review requested."""
+    load(app, make_pr(1, review="COMMENTED", requested=True))  # the author asked for another review
+    app._approved(key(1), 0)
+    at = app.submitted[key(1)][1]
+    load(app, make_pr(1, review="COMMENTED", requested=True))
+    assert groups(app)["approved"] == [1]
+    load(app, make_pr(1, review="APPROVED", review_h=(NOW - at) / HOUR, requested=True))
+    assert groups(app)["approved"] == [1]
+    load(app, make_pr(1, review="APPROVED", review_h=(NOW - at) / HOUR))
+    assert groups(app)["approved"] == [1] and app.submitted == {}
+    load(app, make_pr(1, review="APPROVED", requested=True))  # from here on, GitHub's data counts
+    assert groups(app)["to review"] == [1]
+
+
+def test_githubs_data_counts_again_after_a_while(app, monkeypatch):
+    load(app, make_pr(1))
+    app._approved(key(1), 0)
+    monkeypatch.setattr(m.time, "time", lambda: NOW + m.SUBMITTED_SECONDS + 1)
+    load(app, make_pr(1))
+    assert groups(app)["to review"] == [1] and app.submitted == {}
+
+
+def test_comments_pushed_right_after_approving_keep_it_approved(app):
+    load(app, make_pr(1))
+    app._approved(key(1), 0)
+    app._pushed(key(1), 2, 0)
+    load(app, make_pr(1, review="COMMENTED"))  # GitHub doesn't have the approval yet
+    assert groups(app)["approved"] == [1]
