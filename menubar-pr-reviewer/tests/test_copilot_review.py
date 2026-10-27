@@ -197,3 +197,37 @@ def test_start_passes_the_model_effort_and_context(tmp_path, monkeypatch):
     assert flags == [["--model", "--reasoning-effort", "--context"], []]
     cmd = runs[0]
     assert cmd[cmd.index("--reasoning-effort") + 1] == "high" and cmd[cmd.index("--context") + 1] == "default"
+
+
+PR = {"title": "Add a cache", "html_url": "https://github.com/acme/web/pull/7", "user": {"login": "Alice"},
+      "base": {"ref": "main"}, "head": {"sha": "abc"}, "body": "Caches things."}
+
+
+def test_pr_context_marks_an_admin_author_and_lists_the_admins():
+    text = cr.pr_markdown("acme/web#7", PR, [], ["alice", "bob"])
+    assert "acme/web#7 by Alice (admin): " in text
+    assert "Repo admins (tech lead and architects): alice, bob\n" in text
+    assert "by Alice (admin)" not in cr.pr_markdown("acme/web#7", PR, [], ["bob"])
+    plain = cr.pr_markdown("acme/web#7", PR, [])
+    assert "(admin)" not in plain and "Repo admins" not in plain
+
+
+def test_existing_comments_mark_the_admins_and_their_approvals(monkeypatch):
+    pages = {
+        "/repos/acme/web/pulls/7/comments": [{"user": {"login": "bob"}, "path": "src/a.ts", "line": 3, "body": "Ok."}],
+        "/repos/acme/web/issues/7/comments": [],
+        "/repos/acme/web/pulls/7/reviews": [
+            {"user": {"login": "Bob"}, "state": "APPROVED", "body": ""},
+            {"user": {"login": "carol"}, "state": "COMMENTED", "body": ""},
+            {"user": {"login": "carol"}, "state": "COMMENTED", "body": "Nice."},
+        ],
+    }
+    monkeypatch.setattr(cr, "api_all", lambda path, token: pages[path])
+    existing = cr.existing_comments("acme/web#7", "t")
+    assert [(c["author"], c.get("approved", False)) for c in existing] == [
+        ("bob", False), ("Bob", True), ("carol", False)]
+    text = cr.comments_markdown(existing, ["bob"])
+    assert "- bob (admin) on src/a.ts:3:\n\nOk.\n\n" in text
+    assert "- Bob (admin) approved the PR\n\n" in text
+    assert "- carol:\n\nNice.\n\n" in text
+    assert cr.comments_markdown([]) == "(no comments yet)\n"

@@ -172,7 +172,7 @@ def test_nothing_automatic_when_the_pr_moved_on(app, github, notes):
 def test_the_budget_doesnt_cap_a_review_that_starts(app, monkeypatch):
     """A review cut off by the budget would leave nothing to show for the credits it used."""
     started = []
-    monkeypatch.setattr(m.copilot_review, "prepare", lambda key, workdir, clones, token: {"base": "main"})
+    monkeypatch.setattr(m.copilot_review, "prepare", lambda key, workdir, clones, token, admins: {"base": "main"})
     monkeypatch.setattr(m.copilot_review, "start", lambda *a, **kw: started.append(kw["max_ai_credits"]) or None)
     monkeypatch.setattr(app, "_review_started", lambda *a: None)
     monkeypatch.setattr(app, "_month_spent", lambda: 95)

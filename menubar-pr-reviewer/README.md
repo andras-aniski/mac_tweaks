@@ -17,6 +17,7 @@ Watches GitHub repos for pull requests to review, from the macOS menu bar (built
 - **Copilot review**: Copilot checks the PR in the background for acceptance criteria, alignment with the repo's docs, technical correctness, and the conventions the repo already follows in that area. Click **Review** on its row; the button shows how it's going. When it's done, a banner shows in the top-right corner: click it to open the comments, or after a failure, to retry. It goes away after 8 seconds (not while the mouse is on it) and isn't kept in Notification Center.
 - **Review any PR**: **Review a PR…** in the menu reviews a PR the menu doesn't offer, e.g. in a repo you don't track, a draft, your own, or one the author filters leave out. Paste its URL (it's filled in when the clipboard holds one). It's listed in To review with a **Remove** button, and stays until it's merged or closed, or you remove it.
 - **Comment levels**: each comment is marked `MUST-FIX`, `SHOULD-FIX`, `QUESTION`, `CONSIDER` or `NITPICK`, in the sb-fe-mfe review format. Copilot only suggests fixes it's confident about; when it's unsure, or the acceptance criteria, docs and code disagree, it asks the author a `QUESTION` instead.
+- **Repo admins**: tell Copilot who a repo's tech lead and architects are, so it doesn't ask an architect to get the architects' sign-off. When the author is one of them, it only checks the change is deliberate; when one of them already approved the PR or agreed in a comment, it doesn't ask. In **Settings…**: **Admins…** on the repo's row, or `pr_reviewer.py admins owner/repo alice bob`.
 - **No tags**: Copilot never @-mentions anyone in its comments, so nobody gets notified by them, even if the PR or its comments ask for it. To allow a tag, ask for it in [`copilot/review-prompt.md`](copilot/review-prompt.md).
 - **Readable prompt**: see exactly what Copilot is told. In **Settings…**: **Review prompt…**.
 - **Check before posting**: you see every comment, and the AI credits spent, before anything goes to GitHub, and pick which to post: each comment, and the summary, has a checkbox. The summary starts unticked. Click **Ready to comment** to open the review window, then **Push** to post the ticked ones as one review.
@@ -28,7 +29,7 @@ Watches GitHub repos for pull requests to review, from the macOS menu bar (built
 - **Monthly budget**: a limit on the AI credits reviews may use per calendar month. Once it's used up, **Review** turns into **Over budget** and no new review starts; one that already started runs to its end. Set it in **Settings…**. The share used shows in green, amber from 80% and red once it's used up.
 - **AI credit statistics**: a dashboard of the credits spent today, this week and this month (against the budget), per day, per agent, per model, and per PR and review round, with the model each round ran on. Click **Today**, **This week**, **This month** or **All time** to see the agents, models and reviewed PRs of that period. Pick a model at the bottom of the window to see only the reviews that used it. Open **Review statistics…** in the menu; its subtitle has the totals. Or run `pr_reviewer.py stats` (`--model` for one model).
 - **Safe reviews**: Copilot only reads; it runs sandboxed, with no network or GitHub access. Only the app posts, and only when you click.
-- **Command line**: add and remove repos, edit the author lists and set the budget from the terminal, also while the app runs.
+- **Command line**: add and remove repos, set their admins, edit the author lists and set the budget from the terminal, also while the app runs.
 
 ## Groups
 
@@ -76,7 +77,7 @@ The menu bar count is the number of PRs in To review and To approve.
 
 **Settings…** opens a window. A text field is saved when you press Return or leave it, a checkbox when you click it. When a value isn't valid, the field goes back to the saved one and the line under it says why.
 
-- **Repositories**: the tracked repos, with their open PRs, or the error when one can't be read. Paste a repo URL (any github.com page in the repo works) or `owner/repo` and press **Track**; when the clipboard holds a repo you don't track yet, the window opens with it filled in. **Remove** stops tracking a repo (it asks first: its Copilot reviews are deleted).
+- **Repositories**: the tracked repos, with their open PRs, or the error when one can't be read. Paste a repo URL (any github.com page in the repo works) or `owner/repo` and press **Track**; when the clipboard holds a repo you don't track yet, the window opens with it filled in. **Admins…** sets the repo's tech lead and architects (see [Copilot reviews](#copilot-reviews)); the row counts them. **Remove** stops tracking a repo (it asks first: its Copilot reviews are deleted).
 - **Check for PRs every**: how often the tracked repos are checked, in minutes; 15 by default.
 - **Only PRs by**: when the list isn't empty, only PRs by these authors show up in To review. Can't be used together with **Skip PRs by**: while one list has logins, the other is greyed out.
 - **Skip PRs by**: PRs by these authors never show up in To review.
@@ -141,6 +142,8 @@ Details and reasoning.
 
 Copilot only states a problem or suggests a fix when it's confident: it checked it in the code or the docs. When it's unsure, and always when the acceptance criteria, the repo's markdown docs and the code don't agree, it asks a `QUESTION` so the author investigates; a possible fix goes in the question, not in a **Suggestion:**.
 
+When a repo's docs ask for the architects' or the tech lead's agreement on something, Copilot asks the author whether they have it. With the repo's admins set (**Admins…** in **Settings…**), it knows who they are: when the author is one, it asks in one sentence whether the change is deliberate instead; when one of them approved the PR or agreed in a comment, it doesn't ask. Reviews of PRs in repos you don't track have no admins.
+
 A row with a finished review says how many comments are must-fix.
 
 The **Ready to comment** window lists the comments to push, the summary, and the AI credits used by each agent and in total. Its numbers come from the Copilot session's log, `~/.copilot/session-state/<session>/events.jsonl`. Each comment, and the summary, has a checkbox. The comments start ticked and the summary unticked; **Push** posts the ticked ones as one review, and its title says what that is ("Push 3 + summary"). A ticked summary becomes the review's text; comments on lines outside the diff go there too, and the rest sit on their lines. Right before posting, the app checks the PR again and leaves out comments that someone has meanwhile posted. When there's nothing to push, there's no Push button. **Approve** approves the PR at the commit Copilot reviewed, with or without comments to push: when there are some, it asks first, and they stay in the window to push or discard. If the PR got new commits since the review (the window and the row say so), GitHub won't take an approval of the reviewed commit; **Approve** then asks whether to approve the latest commit anyway, or you can discard the review and review it again. **Discard review** deletes the comments, and **Copilot session** opens the transcript. **Open on GitHub ↗**, next to the PR's title, opens the PR in the browser.
@@ -174,7 +177,7 @@ Every review is logged to `history.jsonl` next to the config when it ends, and s
 
 - Polls every 15 minutes by default (**Check for PRs every** in **Settings…**), every 2 minutes after an error. Each repo is one GraphQL request per 50 open PRs.
 - The token comes from the GitHub CLI (`gh auth token`), so run `gh auth login` once. The token is never stored.
-- `~/Library/Application Support/menubar-pr-reviewer/` holds `config.json` (repos, check interval, author lists, budget, automation, Copilot options), `state.json` (the PRs already seen or ignored, and the Copilot reviews) and `history.jsonl` (the reviews' log). The app reloads the config within a second when it changes on disk.
+- `~/Library/Application Support/menubar-pr-reviewer/` holds `config.json` (repos and their admins, check interval, author lists, budget, automation, Copilot options), `state.json` (the PRs already seen or ignored, and the Copilot reviews) and `history.jsonl` (the reviews' log). The app reloads the config within a second when it changes on disk.
 - Reviews work in `reviews/` next to them. Each repo is cloned once into `clones/` (the first review of a repo takes longer), and each review gets a quick, hardlinked clone of it in its folder. A review's checkout is removed when Copilot is done, and the rest when it's pushed or discarded, or the PR is closed.
 
 ## Usage
@@ -193,6 +196,7 @@ Edits the config, also while the app is running:
 .venv/bin/python pr_reviewer.py remove owner/repo other/repo
 .venv/bin/python pr_reviewer.py allow alice bob                    # without logins: show the list
 .venv/bin/python pr_reviewer.py block --remove renovate
+.venv/bin/python pr_reviewer.py admins owner/repo alice bob
 .venv/bin/python pr_reviewer.py budget 500                         # without a number: show it; --off: no limit
 .venv/bin/python pr_reviewer.py list
 .venv/bin/python pr_reviewer.py stats                              # AI credits spent, and the reviewed PRs

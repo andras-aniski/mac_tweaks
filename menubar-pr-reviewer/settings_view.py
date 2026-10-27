@@ -114,8 +114,8 @@ def _height(label, width):
 class SettingsWindow:
     def __init__(self, actions):
         """actions: the app. It has track_repo(text) and set_poll / set_wait / set_budget(text), which return an
-        error message or None, set_authors(name, text), remove_repo(key), set_automation(name, on),
-        set_model(model or None), set_review_option(key, value) and show_prompt(_)."""
+        error message or None, set_authors(name, text), set_admins(key, text), remove_repo(key),
+        set_automation(name, on), set_model(model or None), set_review_option(key, value) and show_prompt(_)."""
         self.actions = actions
         self.targets = []  # AppKit doesn't retain targets
         self.dirty = set()  # fields typed in but not committed yet: update() leaves them alone
@@ -225,17 +225,22 @@ class SettingsWindow:
             label = _label("No repos tracked yet. Add one below.", 13, NSColor.secondaryLabelColor())
             label.setFrame_(NSMakeRect(12, (REPO_ROW - 17) / 2, width - 24, 17))
             self.repo_box.addSubview_(label)
-        for i, (key, detail, image) in enumerate(self.repos):
+        for i, (key, detail, image, admins) in enumerate(self.repos):
             y = i * REPO_ROW
             led = NSImageView.imageViewWithImage_(image)
             led.setFrame_(NSMakeRect(12, y + (REPO_ROW - 14) / 2, 14, 14))
+            right = width - 10
+            for title, callback in (("Remove", lambda key=key: self._remove(key)),
+                                    ("Admins…", lambda key=key, admins=admins: self._edit_admins(key, admins))):
+                button = self._button(title, callback, self.repo_box)
+                size = button.frame().size
+                right -= size.width
+                button.setFrameOrigin_(NSMakePoint(right, y + (REPO_ROW - size.height) / 2))
+                right -= 4
             name = _label(key)
-            name.setFrame_(NSMakeRect(34, y + 5, width - 160, 17))
+            name.setFrame_(NSMakeRect(34, y + 5, right - 40, 17))
             info = _label(detail, 11, NSColor.secondaryLabelColor())
-            info.setFrame_(NSMakeRect(34, y + 22, width - 160, 14))
-            remove = self._button("Remove", lambda key=key: self._remove(key), self.repo_box)
-            size = remove.frame().size
-            remove.setFrameOrigin_(NSMakePoint(width - 10 - size.width, y + (REPO_ROW - size.height) / 2))
+            info.setFrame_(NSMakeRect(34, y + 22, right - 40, 14))
             for view in (led, name, info):
                 self.repo_box.addSubview_(view)
 
@@ -322,7 +327,7 @@ class SettingsWindow:
     # showing the config
 
     def update(self, config, repos, month_spent, budget_share=None, models=(None, [])):
-        """repos: [(owner/repo, status line, LED image)]. budget_share: (percentage, rgb) of the budget used.
+        """repos: [(owner/repo, status line, LED image, admins comma-separated)]. budget_share: (percentage, rgb) of the budget used.
         models: (the model Copilot uses by default or None, the models it offers)."""
         self.config, self.month_spent, self.budget_share, self.models = config, month_spent, budget_share, models
         if repos != self.repos:
@@ -437,6 +442,24 @@ class SettingsWindow:
         alert.addButtonWithTitle_("Cancel")
         if alert.runModal() == NSAlertFirstButtonReturn:
             self.actions.remove_repo(key)
+
+    def _edit_admins(self, key, admins):
+        """admins: the repo's admins, comma-separated."""
+        alert = NSAlert.alloc().init()
+        alert.setMessageText_(f"Admins of {key}")
+        alert.setInformativeText_("The tech lead and architects: GitHub logins, separated by commas or spaces. "
+                                  "Copilot doesn't ask them to get their own sign-off, and doesn't ask for one "
+                                  "that an admin already gave on the PR.")
+        field = NSTextField.textFieldWithString_(admins)
+        field.setPlaceholderString_("alice, bob")
+        field.setFrame_(NSMakeRect(0, 0, 300, 22))
+        alert.setAccessoryView_(field)
+        alert.addButtonWithTitle_("Save")
+        alert.addButtonWithTitle_("Cancel")
+        alert.layout()
+        alert.window().setInitialFirstResponder_(field)
+        if alert.runModal() == NSAlertFirstButtonReturn:
+            self.actions.set_admins(key, field.stringValue())
 
     def _pick_option(self, key):
         _, popup, values = self.options[key]

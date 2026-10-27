@@ -96,6 +96,28 @@ def test_budget_share_is_colored(app):
     assert app._spending_summary()[0] == ("⚠︎ Over budget", m.RED)
 
 
+def test_repo_admins(app):
+    assert app.set_admins("Acme/Web", "@Alice, bob") is None
+    config = m.load_config()
+    assert config["repos"][0]["admins"] == ["Alice", "bob"]
+    assert m.repo_admins(config, "ACME/web#7") == ["Alice", "bob"] and m.repo_admins(config, "acme/api#1") == []
+    assert app.set_admins("acme/api", "carol") == "Not tracking acme/api"
+    app.set_admins("acme/web", "")
+    assert "admins" not in m.load_config()["repos"][0]
+
+
+def test_reviews_get_the_repos_admins(app, monkeypatch):
+    given = []
+    monkeypatch.setattr(m.copilot_review, "prepare",
+                        lambda key, workdir, clones, token, admins: given.append(admins) or {"base": "main"})
+    monkeypatch.setattr(m.copilot_review, "start", lambda *a, **kw: None)
+    monkeypatch.setattr(app, "_review_started", lambda *a: None)
+    load(app, make_pr(1))
+    app.set_admins("acme/web", "alice")
+    app._start_review(key(1))
+    assert given == [["alice"]]
+
+
 def test_set_effort_and_context(app):
     app.set_review_option("copilot_effort", "xhigh")
     app.set_review_option("copilot_context", "default")
@@ -105,7 +127,7 @@ def test_set_effort_and_context(app):
 
 def test_reviews_start_with_the_chosen_model_effort_and_context(app, monkeypatch):
     started = []
-    monkeypatch.setattr(m.copilot_review, "prepare", lambda key, workdir, clones, token: {"base": "main"})
+    monkeypatch.setattr(m.copilot_review, "prepare", lambda key, workdir, clones, token, admins: {"base": "main"})
     monkeypatch.setattr(m.copilot_review, "start", lambda *a, **kw: started.append(kw) or None)
     monkeypatch.setattr(app, "_review_started", lambda *a: None)
     load(app, make_pr(1))

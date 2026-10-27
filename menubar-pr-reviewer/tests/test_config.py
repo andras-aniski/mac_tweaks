@@ -47,6 +47,9 @@ def test_a_broken_config_is_an_error(config_path):
     config_path.write_text(json.dumps({"repos": [{"owner": "a"}]}))
     with pytest.raises(ValueError):
         m.load_config()
+    config_path.write_text(json.dumps({"repos": [{"owner": "a", "repo": "b", "admins": "alice"}]}))
+    with pytest.raises(ValueError, match="admins"):
+        m.load_config()
 
 
 @pytest.mark.parametrize("text, repo", [
@@ -82,6 +85,13 @@ def test_cli(config_path, capsys):
     assert cli(capsys, "budget", "250") == "250 AIC a month, 0.0 used"
     assert cli(capsys, "budget", "--off") == "No limit, 0.0 AIC used this month"
     assert cli(capsys, "list").splitlines() == ["acme/web", "allow: (everyone)", "block: renovate[bot]"]
+    assert cli(capsys, "admins", "Acme/Web", "alice", "@Bob") == "alice, Bob"
+    assert cli(capsys, "admins", "acme/web", "bob") == "alice, Bob"
+    assert cli(capsys, "list").splitlines()[0] == "acme/web  admins: alice, Bob"
+    assert cli(capsys, "admins", "acme/web", "--remove", "alice", "bob") == "(none)"
+    assert "admins" not in m.load_config()["repos"][0]
+    with pytest.raises(SystemExit, match="Not tracked"):
+        m.cli(["admins", "nope/x", "alice"])
     with pytest.raises(SystemExit):
         m.cli(["remove", "nope/x"])
     with pytest.raises(SystemExit):

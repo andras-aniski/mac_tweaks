@@ -136,7 +136,8 @@ def api_all(path, token):
 
 
 def existing_comments(key, token):
-    """Every comment on the PR, by anyone: [{"author", "path", "line", "body"}]; path is None for general ones."""
+    """Every comment on the PR, by anyone: [{"author", "path", "line", "body"}]; path is None for general ones.
+    Approvals are in it too, with or without a text, marked "approved": True."""
     owner, name, number = split_key(key)
     base = f"/repos/{owner}/{name}"
 
@@ -152,10 +153,42 @@ def existing_comments(key, token):
         for c in api_all(f"{base}/issues/{number}/comments", token)
     ]
     comments += [
-        {"author": login(r), "path": None, "line": None, "body": r["body"]}
-        for r in api_all(f"{base}/pulls/{number}/reviews", token) if r.get("body")
+        {"author": login(r), "path": None, "line": None, "body": r.get("body") or "",
+         **({"approved": True} if r.get("state") == "APPROVED" else {})}
+        for r in api_all(f"{base}/pulls/{number}/reviews", token) if r.get("body") or r.get("state") == "APPROVED"
     ]
     return comments
+
+
+def is_admin(login, admins):
+    return login.lower() in {a.lower() for a in admins}
+
+
+def pr_markdown(key, pr, issues, admins=()):
+    """context/pr.md: the PR's title, author, description and linked issues, and the repo's admins if it has any."""
+    author = (pr.get("user") or {}).get("login", "ghost")
+    parts = [
+        f'# {pr["title"]}\n\n{key} by {author}' + (" (admin)" if is_admin(author, admins) else "")
+        + f': {pr["html_url"]}\n'
+        + (f'Repo admins (tech lead and architects): {", ".join(admins)}\n' if admins else "")
+        + f'Base branch: {pr["base"]["ref"]} · head commit: {pr["head"]["sha"]}\n\n## Description\n\n'
+        f'{pr.get("body") or "(no description)"}\n'
+    ]
+    for issue in issues:
+        parts.append(f'\n## Linked issue #{issue["number"]}: {issue["title"]}\n\n{issue["url"]}\n\n'
+                     f'{issue.get("body") or "(no description)"}\n')
+    return "".join(parts)
+
+
+def comments_markdown(existing, admins=()):
+    """context/existing-comments.md, with the admins' comments and approvals marked."""
+    def entry(c):
+        who = c["author"] + (" (admin)" if is_admin(c["author"], admins) else "")
+        if c.get("approved"):
+            return f"- {who} approved the PR" + (f':\n\n{c["body"]}\n\n' if c["body"] else "\n\n")
+        return f'- {who}' + (f' on {c["path"]}:{c["line"]}' if c["path"] else "") + f':\n\n{c["body"]}\n\n'
+
+    return "".join(entry(c) for c in existing) or "(no comments yet)\n"
 
 
 def _normalize(text):
@@ -206,8 +239,9 @@ def git(args, cwd=None, token=None):
 
 # --- Review ------------------------------------------------------------------
 
-def prepare(key, workdir, clones_dir, token):
-    """Write the PR's context to workdir/context and check out its head in workdir/checkout.
+def prepare(key, workdir, clones_dir, token, admins=()):
+    """Write the PR's context to workdir/context and check out its head in workdir/checkout. admins: the logins of
+    the repo's tech lead and architects, marked in the context so Copilot doesn't ask them for their own sign-off.
 
     Returns {"head": sha, "base": the base branch's ref in the checkout}.
     """
@@ -219,22 +253,10 @@ def prepare(key, workdir, clones_dir, token):
     issues = api("POST", "/graphql", token, {"query": CONTEXT_QUERY, "variables": {
         "owner": owner, "name": name, "number": number,
     }})["data"]["repository"]["pullRequest"]["closingIssuesReferences"]["nodes"]
-    parts = [
-        f'# {pr["title"]}\n\n{key} by {(pr.get("user") or {}).get("login", "ghost")}: {pr["html_url"]}\n'
-        f'Base branch: {pr["base"]["ref"]} · head commit: {pr["head"]["sha"]}\n\n## Description\n\n'
-        f'{pr.get("body") or "(no description)"}\n'
-    ]
-    for issue in issues:
-        parts.append(f'\n## Linked issue #{issue["number"]}: {issue["title"]}\n\n{issue["url"]}\n\n'
-                     f'{issue.get("body") or "(no description)"}\n')
-    write(os.path.join(context, "pr.md"), "".join(parts))
+    write(os.path.join(context, "pr.md"), pr_markdown(key, pr, issues, admins))
     write(os.path.join(context, "diff.patch"),
           api("GET", f"/repos/{owner}/{name}/pulls/{number}", token, accept="application/vnd.github.diff"))
-    existing = existing_comments(key, token)
-    write(os.path.join(context, "existing-comments.md"), "".join(
-        f'- {c["author"]}' + (f' on {c["path"]}:{c["line"]}' if c["path"] else "") + f':\n\n{c["body"]}\n\n'
-        for c in existing
-    ) or "(no comments yet)\n")
+    write(os.path.join(context, "existing-comments.md"), comments_markdown(existing_comments(key, token), admins))
 
     # One full clone per repo, reused. Copilot's sandbox only reads inside the review folder, so each review gets
     # its own clone of it there (hardlinked, so it's quick): a worktree's .git would point outside.

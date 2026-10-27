@@ -936,6 +936,26 @@ def author_ok(author, config):
     return (not allow or same_login(author) in allow) and same_login(author) not in block
 
 
+def find_repo(repos, key):
+    """The tracked repo "owner/repo" (any case), or None."""
+    return next((r for r in repos if repo_key(r).lower() == key.lower()), None)
+
+
+def repo_admins(config, key):
+    """The admins (tech lead and architects) of the repo of "owner/repo#123"; [] if it isn't tracked."""
+    return (find_repo(config["repos"], key.split("#")[0]) or {}).get("admins", [])
+
+
+def add_logins(logins, changes):
+    have = {same_login(a) for a in logins}
+    return logins + [a for a in changes if same_login(a) not in have]
+
+
+def remove_logins(logins, changes):
+    gone = {same_login(a) for a in changes}
+    return [a for a in logins if same_login(a) not in gone]
+
+
 def last_activity(pr):
     """When the PR was marked ready for review, last pushed to, or last replied to in my threads."""
     return max(pr["ready"], pr["pushed"], pr["replied"])
@@ -1059,6 +1079,9 @@ def load_config():
     for r in config["repos"]:
         if not (isinstance(r, dict) and isinstance(r.get("owner"), str) and isinstance(r.get("repo"), str)):
             raise ValueError(f"invalid repo entry: {json.dumps(r)}")
+        admins = r.get("admins", [])
+        if not (isinstance(admins, list) and all(isinstance(a, str) for a in admins)):
+            raise ValueError(f'"admins" of {repo_key(r)} must be a list of GitHub logins')
     for name in ("allow", "block"):
         logins = config.setdefault(name, [])
         if not (isinstance(logins, list) and all(isinstance(a, str) for a in logins)):
@@ -1795,7 +1818,7 @@ class PRReviewerApp(rumps.App):
             token = self.token or gh_token()
             shutil.rmtree(workdir, ignore_errors=True)
             os.makedirs(workdir)
-            meta = copilot_review.prepare(key, workdir, clones_dir(), token)
+            meta = copilot_review.prepare(key, workdir, clones_dir(), token, repo_admins(self.config, key))
             # the budget only keeps reviews from starting: one cut off by it would leave no result to show
             proc = copilot_review.start(key, workdir, session, meta["base"], **options,
                                         max_ai_credits=self.config.get("copilot_max_ai_credits"))
@@ -2305,7 +2328,10 @@ class PRReviewerApp(rumps.App):
         repos = []
         for r in self.repos:
             detail, rgb = self._repo_status(repo_key(r), to_review)
-            repos.append((repo_key(r), detail, led_image(rgb)))
+            admins = r.get("admins", [])
+            if admins:
+                detail += f' · {len(admins)} admin{"s" if len(admins) != 1 else ""}'
+            repos.append((repo_key(r), detail, led_image(rgb), ", ".join(admins)))
         self.settings_window.update(self.config, repos, self.month_spent, self._budget_share(),
                                     (copilot_review.default_model(), self.models))
 
@@ -2316,7 +2342,7 @@ class PRReviewerApp(rumps.App):
         if not r:
             return "Not a repo. Expected e.g. https://github.com/owner/repo"
         self._check_config()
-        same = next((x for x in self.repos if repo_key(x).lower() == repo_key(r).lower()), None)
+        same = find_repo(self.repos, repo_key(r))
         if same:
             return f"Already tracking {repo_key(same)}"
         self.repos.append(r)
@@ -2329,6 +2355,20 @@ class PRReviewerApp(rumps.App):
         self.config["repos"] = [x for x in self.repos if repo_key(x) != key]
         self._save_config()
         self._forget_untracked()
+        self._render()
+
+    def set_admins(self, key, text):
+        """key: "owner/repo"; text: the logins of its tech lead and architects."""
+        self._check_config()
+        r = find_repo(self.repos, key)
+        if r is None:
+            return f"Not tracking {key}"
+        logins = parse_logins(text)
+        if logins:
+            r["admins"] = logins
+        else:
+            r.pop("admins", None)
+        self._save_config()
         self._render()
 
     def set_automation(self, name, on):
@@ -2446,6 +2486,18 @@ def cli(argv):
         )
         sub.add_argument("logins", nargs="*", metavar="LOGIN", help="GitHub login")
         sub.add_argument("-r", "--remove", action="store_true", help="remove the logins instead of adding them")
+    admins = commands.add_parser(
+        "admins", help="show or edit a repo's admins",
+        description="A repo's admins are its tech lead and architects. Copilot doesn't ask them to get their own "
+        "sign-off, and doesn't ask for one that an admin already gave on the PR. Without logins: show them.\n"
+        "Exits with status 1 if the repo isn't tracked.",
+        epilog="examples:\n  pr_reviewer admins owner/repo\n  pr_reviewer admins owner/repo alice bob\n"
+        "  pr_reviewer admins owner/repo --remove alice",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    admins.add_argument("repo", metavar="REPO", help="repo URL or owner/repo")
+    admins.add_argument("logins", nargs="*", metavar="LOGIN", help="GitHub login")
+    admins.add_argument("-r", "--remove", action="store_true", help="remove the logins instead of adding them")
     budget = commands.add_parser(
         "budget", help="show or set the monthly AI credit budget",
         description="AI credits Copilot reviews may use per calendar month. Once they're used up, no new review "
@@ -2460,8 +2512,8 @@ def cli(argv):
                                 "all, then by model, then every reviewed PR with its review rounds.",
                                 epilog=f"History: {history_path()}")
     stats.add_argument("--model", help="only the reviews that used this model, e.g. claude-sonnet-5.5")
-    commands.add_parser("list", help="show tracked repos and the author lists",
-                        description="Print the tracked repos, then the allow and block lists.")
+    commands.add_parser("list", help="show tracked repos, their admins and the author lists",
+                        description="Print the tracked repos with their admins, then the allow and block lists.")
     commands.add_parser("help", help="show this help and every command's parameters")
     args = parser.parse_args(argv)
 
@@ -2516,7 +2568,7 @@ def cli(argv):
 
     if args.command == "list":
         for r in repos:
-            print(repo_key(r))
+            print(repo_key(r) + (f'  admins: {", ".join(r["admins"])}' if r.get("admins") else ""))
         print(f'allow: {", ".join(config["allow"]) or "(everyone)"}')
         print(f'block: {", ".join(config["block"]) or "(nobody)"}')
         return
@@ -2525,17 +2577,31 @@ def cli(argv):
         logins = config[args.command]
         changes = parse_logins(" ".join(args.logins))
         if args.remove:
-            gone = {same_login(a) for a in changes}
-            config[args.command] = [a for a in logins if same_login(a) not in gone]
+            config[args.command] = remove_logins(logins, changes)
         else:
             if changes and config[other_list(args.command)]:
                 sys.exit(f"Use one list or the other: clear the {other_list(args.command)} list first "
                          f"(pr_reviewer {other_list(args.command)} --remove ...)")
-            have = {same_login(a) for a in logins}
-            logins += [a for a in changes if same_login(a) not in have]
+            config[args.command] = add_logins(logins, changes)
         if changes:
             save_config(config)
         print(", ".join(config[args.command]) or ("(everyone)" if args.command == "allow" else "(nobody)"))
+        return
+
+    if args.command == "admins":
+        r = parse_repo(args.repo)
+        match = r and find_repo(repos, repo_key(r))
+        if not match:
+            sys.exit(f"Not tracked: {args.repo}")
+        changes = parse_logins(" ".join(args.logins))
+        logins = (remove_logins if args.remove else add_logins)(match.get("admins", []), changes)
+        if logins:
+            match["admins"] = logins
+        else:
+            match.pop("admins", None)
+        if changes:
+            save_config(config)
+        print(", ".join(logins) or "(none)")
         return
 
     if args.command == "add":
@@ -2553,7 +2619,7 @@ def cli(argv):
     missing = []
     for ref in args.repo:
         r = parse_repo(ref)
-        match = r and next((x for x in repos if repo_key(x).lower() == repo_key(r).lower()), None)
+        match = r and find_repo(repos, repo_key(r))
         if not match:
             missing.append(ref)
             continue
