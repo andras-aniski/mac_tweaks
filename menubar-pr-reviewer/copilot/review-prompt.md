@@ -11,7 +11,7 @@ Only a few shell commands are allowed: read-only git commands, `cd`, `ls`, `cat`
 
 Steps:
 
-1. Run these four subagents in parallel with the task tool. Tell each one about the review folder layout above (the paths and the base ref).
+1. Run these subagents in parallel with the task tool, and no others. Tell each one about the review folder layout above (the paths and the base ref).
    - `prr-acceptance`: does the change satisfy the acceptance criteria?
    - `prr-docs`: does the change follow the repo's markdown docs, and does it update them where it should?
    - `prr-code`: is the change technically correct?

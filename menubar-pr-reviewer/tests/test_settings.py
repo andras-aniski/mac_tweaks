@@ -125,7 +125,7 @@ def test_set_effort_and_context(app):
     assert (config["copilot_effort"], config["copilot_context"]) == ("xhigh", "default")
 
 
-def test_reviews_start_with_the_chosen_model_effort_and_context(app, monkeypatch):
+def test_reviews_start_with_the_chosen_model_effort_context_and_subagents(app, monkeypatch):
     started = []
     monkeypatch.setattr(m.copilot_review, "prepare", lambda key, workdir, clones, token, admins: {"base": "main"})
     monkeypatch.setattr(m.copilot_review, "start", lambda *a, **kw: started.append(kw) or None)
@@ -133,9 +133,11 @@ def test_reviews_start_with_the_chosen_model_effort_and_context(app, monkeypatch
     load(app, make_pr(1))
     app.set_model("claude-opus-5.5")
     app.set_review_option("copilot_effort", "high")
+    app.set_agent("prr-conventions", False)
     app._start_review(key(1))
-    assert {k: started[0][k] for k in ("model", "effort", "context")} == {
-        "model": "claude-opus-5.5", "effort": "high", "context": "long_context"}
+    assert {k: started[0][k] for k in ("model", "effort", "context", "agents")} == {
+        "model": "claude-opus-5.5", "effort": "high", "context": "long_context",
+        "agents": ["prr-acceptance", "prr-docs", "prr-code"]}
     job = app.state["reviews"][key(1)]
     assert (job["model"], job["effort"], job["context"]) == ("claude-opus-5.5", "high", "long_context")
 
@@ -145,3 +147,14 @@ def test_set_model(app):
     assert m.load_config()["copilot_model"] == "gpt-6.1-sol"
     app.set_model(None)
     assert "copilot_model" not in m.load_config()
+
+
+def test_subagents_can_be_turned_off_but_not_all(app):
+    *rest, last = m.copilot_review.SUBAGENTS
+    for agent in rest:
+        assert app.set_agent(agent, False) is None
+    assert m.review_agents(m.load_config()) == [last]
+    assert app.set_agent(last, False) == "At least one subagent has to run."
+    assert m.review_agents(m.load_config()) == [last]
+    assert app.set_agent(rest[0], True) is None and app.set_agent(rest[0], True) is None
+    assert m.load_config()["copilot_agents_off"] == rest[1:]

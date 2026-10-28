@@ -37,6 +37,7 @@ AGENT_LABELS = {
     "prr-code": "Technical correctness",
     "prr-conventions": "Repo conventions",
 }
+SUBAGENTS = [name for name in AGENT_LABELS if name != "main"]
 # Copilot only reads and reports: the app posts the comments, after you've seen them. The PR's description and
 # comments are written by others, so it gets an allowlist rather than --allow-all-tools: read-only shell commands,
 # and writing its result file. Reading files inside the checkout and the --add-dir folders needs no permission.
@@ -286,16 +287,27 @@ def remove_checkout(workdir):
     shutil.rmtree(os.path.join(workdir, "checkout"), ignore_errors=True)
 
 
-def start(key, workdir, session_id, base, model=None, effort=None, context=None, max_ai_credits=None):
+def review_prompt(key, base, agents=None):
+    """The prompt for a PR. agents: the subagents to run, None for all; the others' lines are left out."""
+    with open(PROMPT_PATH) as f:
+        lines = f.read().splitlines(keepends=True)
+    off = set(SUBAGENTS) - set(SUBAGENTS if agents is None else agents)
+    prompt = "".join(
+        line for line in lines
+        if not (match := re.match(r"\s*- `([\w-]+)`:", line)) or match.group(1) not in off
+    )
+    for name, value in {"key": key, "base": base}.items():
+        prompt = prompt.replace("{{" + name + "}}", value)
+    return prompt
+
+
+def start(key, workdir, session_id, base, model=None, effort=None, context=None, agents=None, max_ai_credits=None):
     """Start Copilot in the background; returns the Popen. It outlives the app, so a restart can pick it up.
-    model, effort, context: None for Copilot's own setting. The subagents inherit them."""
+    model, effort, context: None for Copilot's own setting. The subagents inherit them. agents: as review_prompt()."""
     copilot = find_copilot()
     if not copilot:
         raise RuntimeError("Copilot CLI not found; install it with `brew install copilot-cli`")
-    with open(PROMPT_PATH) as f:
-        prompt = f.read()
-    for name, value in {"key": key, "base": base}.items():
-        prompt = prompt.replace("{{" + name + "}}", value)
+    prompt = review_prompt(key, base, agents)
     cmd = [
         copilot, "-p", prompt,
         "--no-ask-user", "--disable-builtin-mcps", "--sandbox", "--disallow-temp-dir",

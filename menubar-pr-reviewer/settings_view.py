@@ -1,5 +1,5 @@
 """The Settings window: the tracked repos, how often to check, the author lists, the budget, the review model,
-effort and context, and the automation.
+effort, context and subagents, and the automation.
 
 Changes apply right away: a text field when you press Return or leave it, a checkbox or a pop-up when you click it. The app
 calls update() whenever the config changes, also from outside the window (the command line, a hand edit).
@@ -31,6 +31,7 @@ from AppKit import (
 )
 from Foundation import NSMakePoint, NSMakeRect, NSObject
 
+import copilot_review
 from stats_view import FlippedView
 
 WIDTH = 600
@@ -39,6 +40,7 @@ LABEL_W = 170
 CONTROL_X = MARGIN + LABEL_W + 10
 CONTROL_W = WIDTH - CONTROL_X - MARGIN
 REPO_ROW = 42
+AGENT_ROW = 22  # the subagents' checkboxes, two per row
 
 FIELDS = (  # name, label, width (None: the whole column), unit
     ("poll", "Check for PRs every", 60, "minutes"),
@@ -115,7 +117,8 @@ class SettingsWindow:
     def __init__(self, actions):
         """actions: the app. It has track_repo(text) and set_poll / set_wait / set_budget(text), which return an
         error message or None, set_authors(name, text), set_admins(key, text), remove_repo(key),
-        set_automation(name, on), set_model(model or None), set_review_option(key, value) and show_prompt(_)."""
+        set_automation(name, on), set_model(model or None), set_review_option(key, value), set_agent(name, on),
+        which returns an error message or None, and show_prompt(_)."""
         self.actions = actions
         self.targets = []  # AppKit doesn't retain targets
         self.dirty = set()  # fields typed in but not committed yet: update() leaves them alone
@@ -182,6 +185,17 @@ class SettingsWindow:
             self.view.addSubview_(label)
             self.view.addSubview_(popup)
             self.options[key] = (label, popup, [value for value, _ in choices])
+        self.agents_label = _label("Subagents:")
+        self.agents_label.setAlignment_(NSTextAlignmentRight)
+        self.agents_hint = _label("", 11, NSColor.secondaryLabelColor(), wrap=True)
+        self.view.addSubview_(self.agents_label)
+        self.view.addSubview_(self.agents_hint)
+        self.agent_checks = {}
+        for name in copilot_review.SUBAGENTS:
+            target = self._target(lambda name=name: self._toggle_agent(name))
+            box = NSButton.checkboxWithTitle_target_action_(copilot_review.AGENT_LABELS[name], target, "fire:")
+            self.view.addSubview_(box)
+            self.agent_checks[name] = box
         self.checks = {}
         for name, title, hint in AUTOMATION:
             target = self._target(lambda name=name: self._toggle(name))
@@ -300,6 +314,14 @@ class SettingsWindow:
             place(popup, CONTROL_X - 3, width, 25)  # the pop-up's bezel is inset: line it up with the fields
             y += 30
         hint(self.model_hint, CONTROL_X, CONTROL_W)
+        y += 12
+        place(self.agents_label, MARGIN, LABEL_W, 17)
+        self.agents_label.setFrameOrigin_(NSMakePoint(MARGIN, y + 1))
+        column = CONTROL_W / 2
+        for i, box in enumerate(self.agent_checks.values()):
+            box.setFrame_(NSMakeRect(CONTROL_X + i % 2 * column, y + i // 2 * AGENT_ROW, column, 18))
+        y += (len(self.agent_checks) + 1) // 2 * AGENT_ROW
+        hint(self.agents_hint, CONTROL_X, CONTROL_W)
         y += 10
         heading("Automation")
         field("wait")
@@ -377,6 +399,14 @@ class SettingsWindow:
         self._fill_models()
         for key, (_, popup, values) in self.options.items():
             popup.selectItemAtIndex_(values.index(self.config[key]))
+        for name, box in self.agent_checks.items():
+            box.setState_(int(name not in config["copilot_agents_off"]))
+        if self.errors.get("agents"):
+            self.agents_hint.setAttributedStringValue_(_colored([(self.errors["agents"], NSColor.systemRedColor())]))
+        else:
+            self.agents_hint.setAttributedStringValue_(_colored([(
+                "They check the PR in parallel, each using its own AI credits. Untick one to skip it in the reviews "
+                "that start from now on.", None)]))
         for name, (box, _) in self.checks.items():
             box.setState_(int(automation[name]))
         self.repo_error_label.setStringValue_(self.repo_error or "")
@@ -468,6 +498,12 @@ class SettingsWindow:
 
     def _pick_model(self):
         self.actions.set_model(self.model_values[self.model_popup.indexOfSelectedItem()])
+        self._refresh()
+
+    def _toggle_agent(self, name):
+        self.errors["agents"] = self.actions.set_agent(name, bool(self.agent_checks[name].state()))
+        if self.errors["agents"]:
+            NSBeep()  # the box gets ticked again, and the hint says why
         self._refresh()
 
     def _toggle(self, name):

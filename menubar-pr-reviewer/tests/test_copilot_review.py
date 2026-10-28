@@ -277,3 +277,14 @@ def test_reviews_of_the_same_repo_can_prepare_at_once(tmp_path, monkeypatch):
     for thread in threads:
         thread.join()
     assert errors == []
+
+
+def test_the_prompt_leaves_out_the_subagents_that_are_off():
+    full = cr.review_prompt("acme/web#1", "origin/main")
+    assert all(f"- `{agent}`:" in full for agent in cr.SUBAGENTS)
+    assert "{{" not in full and "acme/web#1" in full
+    prompt = cr.review_prompt("acme/web#1", "origin/main", ["prr-code", "prr-docs"])
+    assert "- `prr-code`:" in prompt and "- `prr-docs`:" in prompt
+    assert "- `prr-acceptance`:" not in prompt and "- `prr-conventions`:" not in prompt
+    assert "- `MUST-FIX`:" in prompt  # other lists stay whole
+    assert len(full.splitlines()) - len(prompt.splitlines()) == 2

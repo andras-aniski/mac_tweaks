@@ -97,3 +97,15 @@ def test_cli(config_path, capsys):
     with pytest.raises(SystemExit):
         m.cli(["budget", "-5"])
     assert cli(capsys, "remove", "acme/web") == "Removed acme/web"
+
+
+def test_subagents_that_are_off(config_path):
+    config_path.write_text(json.dumps({"repos": []}))
+    assert m.review_agents(m.load_config()) == m.copilot_review.SUBAGENTS  # all on by default
+    config_path.write_text(json.dumps({"repos": [], "copilot_agents_off": ["prr-docs", "prr-gone", 5]}))
+    config = m.load_config()
+    assert config["copilot_agents_off"] == ["prr-docs"]
+    assert "prr-docs" not in m.review_agents(config)
+    for bad in ("prr-docs", m.copilot_review.SUBAGENTS):  # not a list; every one off
+        config_path.write_text(json.dumps({"repos": [], "copilot_agents_off": bad}))
+        assert m.load_config()["copilot_agents_off"] == []

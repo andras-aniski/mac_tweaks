@@ -737,7 +737,8 @@ class PromptWindow:
         close.setAutoresizingMask_(NSViewMinXMargin | NSViewMaxYMargin)
         view.addSubview_(close)
 
-    def update(self):
+    def update(self, agents):
+        """agents: the subagents reviews run; the others are marked off."""
         bold = NSFont.systemFontOfSize_weight_(14, NSFontWeightSemibold)
         small = NSFont.systemFontOfSize_(11)
         mono = NSFont.monospacedSystemFontOfSize_weight_(12, 0)
@@ -748,16 +749,19 @@ class PromptWindow:
                 NSFontAttributeName: font, NSForegroundColorAttributeName: color or NSColor.labelColor(),
             }))
 
-        agents = os.path.join(copilot_review.COPILOT_DIR, ".github", "agents")
-        sections = [("Review prompt", copilot_review.PROMPT_PATH)] + [
+        folder = os.path.join(copilot_review.COPILOT_DIR, ".github", "agents")
+        sections = [("Review prompt", copilot_review.PROMPT_PATH, None)] + [
             (copilot_review.AGENT_LABELS.get(name.removesuffix(".agent.md"), name) + " subagent",
-             os.path.join(agents, name))
-            for name in sorted(os.listdir(agents)) if name.endswith(".agent.md")
+             os.path.join(folder, name), name.removesuffix(".agent.md"))
+            for name in sorted(os.listdir(folder)) if name.endswith(".agent.md")
         ]
-        for i, (title, path) in enumerate(sections):
+        for i, (title, path, agent) in enumerate(sections):
             note = os.path.relpath(path, copilot_review.TOOL_DIR)
             if path == copilot_review.PROMPT_PATH:
-                note += "  ·  {{key}} and {{base}} are filled in for each PR"
+                note += ("  ·  {{key}} and {{base}} are filled in for each PR, and the lines of subagents that are "
+                         "off in Settings are left out")
+            elif agent not in agents:
+                note += "  ·  off in Settings: reviews don't run it"
             add(("\n\n" if i else "") + title + "\n", bold)
             add(note + "\n\n", small, NSColor.secondaryLabelColor())
             with open(path) as f:
@@ -1107,7 +1111,16 @@ def load_config():
     for name, default in REVIEW_DEFAULTS.items():
         if config.get(name) not in REVIEW_CHOICES[name]:
             config[name] = default
+    # the subagents that reviews skip; listing the ones off keeps a new subagent on. At least one runs.
+    off = config.get("copilot_agents_off")
+    off = [a for a in copilot_review.SUBAGENTS if a in off] if isinstance(off, list) else []
+    config["copilot_agents_off"] = off if len(off) < len(copilot_review.SUBAGENTS) else []
     return config
+
+
+def review_agents(config):
+    """The subagents that reviews run."""
+    return [a for a in copilot_review.SUBAGENTS if a not in config["copilot_agents_off"]]
 
 
 def load_state():
@@ -1179,7 +1192,8 @@ class PRReviewerApp(rumps.App):
             self.config = load_config()
         except ValueError:
             self.config = {"repos": [], "allow": [], "block": [], "automation": dict(AUTOMATION_DEFAULTS),
-                           "poll_minutes": DEFAULT_POLL_MINUTES, **REVIEW_DEFAULTS}
+                           "poll_minutes": DEFAULT_POLL_MINUTES, **REVIEW_DEFAULTS,
+                           "copilot_agents_off": []}
         self.config_mtime = config_mtime()
         self.state = load_state()
         for job in self.state["reviews"].values():
@@ -1806,13 +1820,13 @@ class PRReviewerApp(rumps.App):
             "effort": self.config["copilot_effort"], "context": self.config["copilot_context"],
         }
         options = {"model": self.config.get("copilot_model"), "effort": self.config["copilot_effort"],
-                   "context": self.config["copilot_context"]}
+                   "context": self.config["copilot_context"], "agents": review_agents(self.config)}
         self._save_state()
         self._render()
         threading.Thread(target=self._review_worker, args=(key, session, options), daemon=True).start()
 
     def _review_worker(self, key, session, options):
-        """options: start()'s model, effort and context."""
+        """options: start()'s model, effort, context and agents."""
         workdir = review_dir(key)
         try:
             token = self.token or gh_token()
@@ -2203,7 +2217,7 @@ class PRReviewerApp(rumps.App):
     def show_prompt(self, _):
         if self.prompt_window is None:
             self.prompt_window = PromptWindow()
-        self.prompt_window.update()  # from the files, so it's always what the next review gets
+        self.prompt_window.update(review_agents(self.config))  # from the files: what the next review gets
         self.prompt_window.show()
 
     def show_stats(self, _):
@@ -2436,6 +2450,16 @@ class PRReviewerApp(rumps.App):
         self._check_config()
         self.config[name] = value
         self._save_config()
+
+    def set_agent(self, name, on):
+        """name: one of copilot_review.SUBAGENTS. Returns an error message, or None. The last one can't be turned off."""
+        self._check_config()
+        off = [a for a in self.config["copilot_agents_off"] if a != name] + ([] if on else [name])
+        if len(off) == len(copilot_review.SUBAGENTS):
+            return "At least one subagent has to run."
+        self.config["copilot_agents_off"] = [a for a in copilot_review.SUBAGENTS if a in off]
+        self._save_config()
+        return None
 
     def set_authors(self, name, text):
         """Returns an error message, or None. Only one of the lists can have logins: clearing one always works."""

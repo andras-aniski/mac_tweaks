@@ -26,6 +26,7 @@ Watches GitHub repos for pull requests to review, from the macOS menu bar (built
 - **Follow-ups**: PRs you reviewed wait in **Reviewed** and come back to **To review** when all your comments are resolved, the author asks for another review, or your review is dismissed (e.g. an approval dismissed by a new push). Approved ones wait in the **Approved** submenu.
 - **Automation**: reviews PRs by itself a while after they're ready (30 minutes by default), and can push the comments and approve PRs whose review found nothing. All off by default. In **Settings…** → **Automation**. The row says when, in blue: "auto-review in 12m". Nothing automatic happens in the first 5 minutes after the app starts, so you can see what's due first.
 - **Review model, effort and context**: the Copilot model reviews run on, how hard it thinks, and its context window. Pick them in **Settings…** under **Copilot reviews**; they apply to reviews started from then on, the subagents included. By default: the model set in Copilot CLI, medium effort, long context.
+- **Pick the subagents**: skip some of the four checks for a while, e.g. to save AI credits. Untick them in **Settings…** under **Subagents**; reviews started from then on leave them out. At least one stays on.
 - **Monthly budget**: a limit on the AI credits reviews may use per calendar month. Once it's used up, **Review** turns into **Over budget** and no new review starts; one that already started runs to its end. Set it in **Settings…**. The share used shows in green, amber from 80% and red once it's used up.
 - **AI credit statistics**: a dashboard of the credits spent today, this week and this month (against the budget), per day, per agent, per model, and per PR and review round, with the model each round ran on. Click **Today**, **This week**, **This month** or **All time** to see the agents, models and reviewed PRs of that period. Pick a model at the bottom of the window to see only the reviews that used it. Open **Review statistics…** in the menu; its subtitle has the totals. Or run `pr_reviewer.py stats` (`--model` for one model).
 - **Safe reviews**: Copilot only reads; it runs sandboxed, with no network or GitHub access. Only the app posts, and only when you click.
@@ -85,6 +86,7 @@ The menu bar count is the number of PRs in To review and To approve.
 - **Review model**: the model new reviews run on: **Copilot default** (the model set in Copilot CLI, shown in brackets), **Auto** (Copilot picks), or one of the models Copilot CLI offers. Running reviews keep theirs.
 - **Thinking effort**: the reasoning effort reviews run with (`--reasoning-effort`), from None to Max; Medium by default.
 - **Context window**: Standard or Long context (`--context`); Long context by default. It's priced higher on the models that have context tiers.
+- **Subagents**: the checks reviews run (see [Copilot reviews](#copilot-reviews)), all on by default. An unticked one is left out of the prompt of reviews that start from then on, and **Review prompt…** marks it off. Unticking the last one doesn't work: the box ticks itself again and the line under it says why.
 - **Review prompt…**: shows the prompt Copilot gets and the subagents' instructions, read-only, from the files in [`copilot/`](copilot/).
 
 **Automation** (all off by default):
@@ -126,7 +128,7 @@ A PR moves to Reviewed once a review of yours is on GitHub, e.g. after pushing t
 - `prr-code`: is it technically correct?
 - `prr-conventions`: does it follow the conventions the repo already uses in that area (how other analytics events are named and sent, how similar components or services are built, naming, patterns, tests)? These are inferred from examples, so its findings are always `QUESTION`s that name the examples and ask whether the difference is intended.
 
-Copilot merges their findings and drops the ones an existing comment already makes, whoever wrote it.
+Copilot merges their findings and drops the ones an existing comment already makes, whoever wrote it. Subagents unticked under **Subagents** in **Settings…** don't run.
 
 Each comment has a level, and they're listed in this order: `MUST-FIX` (blocks the merge), `SHOULD-FIX` (breaks the repo's guidelines), `QUESTION` (needs the author's answer), `CONSIDER` (an improvement), `NITPICK` (style, only when a repo doc backs it). Comments are posted in the format of the sb-fe-mfe review guidelines:
 
