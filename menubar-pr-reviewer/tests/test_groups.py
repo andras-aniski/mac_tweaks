@@ -207,7 +207,8 @@ def test_it_stays_approved_till_githubs_data_has_the_approval(app):
 def test_githubs_data_counts_again_after_a_while(app, monkeypatch):
     load(app, make_pr(1))
     app._approved(key(1), 0)
-    monkeypatch.setattr(m.time, "time", lambda: NOW + m.SUBMITTED_SECONDS + 1)
+    later = m.time.time() + m.SUBMITTED_SECONDS + 1  # not NOW: that's when the test run started
+    monkeypatch.setattr(m.time, "time", lambda: later)
     load(app, make_pr(1))
     assert groups(app)["to review"] == [1] and app.submitted == {}
 

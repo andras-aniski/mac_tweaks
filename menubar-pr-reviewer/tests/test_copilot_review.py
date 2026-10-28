@@ -231,3 +231,49 @@ def test_existing_comments_mark_the_admins_and_their_approvals(monkeypatch):
     assert "- Bob (admin) approved the PR\n\n" in text
     assert "- carol:\n\nNice.\n\n" in text
     assert cr.comments_markdown([]) == "(no comments yet)\n"
+
+
+def test_reviews_of_the_same_repo_can_prepare_at_once(tmp_path, monkeypatch):
+    def run(*args, cwd=tmp_path):
+        return cr.subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+    def commit(message):
+        run("commit", "--quiet", "--allow-empty", "-m", message, cwd=work)
+        run("push", "--quiet", "--force", "origin", "HEAD:refs/heads/master", cwd=work)
+
+    upstream, work, clone = tmp_path / "upstream.git", tmp_path / "work", tmp_path / "clones" / "acme" / "web"
+    run("init", "--quiet", "--bare", str(upstream))
+    run("init", "--quiet", str(work))
+    run("config", "user.name", "T", cwd=work)
+    run("config", "user.email", "t@example.com", cwd=work)
+    run("remote", "add", "origin", str(upstream), cwd=work)
+    commit("base")
+    numbers = range(1, 9)
+    for number in numbers:
+        run("push", "--quiet", "origin", f"HEAD:refs/pull/{number}/head", cwd=work)
+    head = run("rev-parse", "HEAD", cwd=work)
+    run("clone", "--quiet", "--no-checkout", str(upstream), str(clone))
+    commit("master moved on")  # each review's fetch now updates origin/master in the shared clone
+
+    def api(method, path, token, body=None, accept=None):
+        if method == "POST":
+            return {"data": {"repository": {"pullRequest": {"closingIssuesReferences": {"nodes": []}}}}}
+        return "diff" if accept else {"base": {"ref": "master"}, "head": {"sha": head}}
+
+    monkeypatch.setattr(cr, "api", api)
+    monkeypatch.setattr(cr, "existing_comments", lambda key, token: [])
+    monkeypatch.setattr(cr, "pr_markdown", lambda key, pr, issues, admins: "")
+    errors = []
+
+    def review(number):
+        try:
+            cr.prepare(f"acme/web#{number}", str(tmp_path / f"review{number}"), str(tmp_path / "clones"), None)
+        except Exception as e:
+            errors.append(str(e))
+
+    threads = [cr.threading.Thread(target=review, args=(number,)) for number in numbers]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == []

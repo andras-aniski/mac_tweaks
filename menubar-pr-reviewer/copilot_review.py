@@ -9,6 +9,7 @@ import re
 import shutil
 import signal
 import subprocess
+import threading
 import urllib.request
 
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -17,6 +18,7 @@ PROMPT_PATH = os.path.join(COPILOT_DIR, "review-prompt.md")
 SESSION_STATE = os.path.expanduser("~/.copilot/session-state")
 COPILOT_SETTINGS = os.path.expanduser("~/.copilot/settings.json")
 NANO_AIU = 1e9  # per AI credit
+CLONE_LOCKS = {}  # clone path -> Lock: reviews of one repo would race on its refs (cannot lock ref 'origin/master')
 
 # Comment levels, most important first, as in the sb-fe-mfe review guidelines
 SEVERITIES = ["MUST-FIX", "SHOULD-FIX", "QUESTION", "CONSIDER", "NITPICK"]
@@ -261,20 +263,21 @@ def prepare(key, workdir, clones_dir, token, admins=()):
     # One full clone per repo, reused. Copilot's sandbox only reads inside the review folder, so each review gets
     # its own clone of it there (hardlinked, so it's quick): a worktree's .git would point outside.
     clone = os.path.join(clones_dir, owner, name)
-    partial = os.path.isdir(clone) and subprocess.run(
-        ["git", "config", "--get", "remote.origin.partialclonefilter"], cwd=clone, capture_output=True, text=True
-    ).stdout.strip()
-    if partial or not os.path.isdir(os.path.join(clone, ".git")):  # partial: git would fetch blobs in the sandbox
-        shutil.rmtree(clone, ignore_errors=True)
-        git(["clone", "--no-checkout", f"https://github.com/{owner}/{name}.git", clone], token=token)
     base = pr["base"]["ref"]
     refs = [f"+refs/remotes/origin/{base}:refs/remotes/origin/{base}", f"+refs/prr/{number}:refs/prr/{number}"]
-    git(["fetch", "--force", "origin", f"+refs/heads/{base}:refs/remotes/origin/{base}",
-         f"+refs/pull/{number}/head:refs/prr/{number}"], cwd=clone, token=token)
     checkout = os.path.join(workdir, "checkout")
     remove_checkout(workdir)
-    git(["clone", "--local", "--no-checkout", clone, checkout])
-    git(["fetch", "--force", "--no-tags", "origin"] + refs, cwd=checkout)
+    with CLONE_LOCKS.setdefault(clone, threading.Lock()):  # setdefault is atomic
+        partial = os.path.isdir(clone) and subprocess.run(
+            ["git", "config", "--get", "remote.origin.partialclonefilter"], cwd=clone, capture_output=True, text=True
+        ).stdout.strip()
+        if partial or not os.path.isdir(os.path.join(clone, ".git")):  # partial: git would fetch blobs in the sandbox
+            shutil.rmtree(clone, ignore_errors=True)
+            git(["clone", "--no-checkout", f"https://github.com/{owner}/{name}.git", clone], token=token)
+        git(["fetch", "--force", "origin", f"+refs/heads/{base}:refs/remotes/origin/{base}",
+             f"+refs/pull/{number}/head:refs/prr/{number}"], cwd=clone, token=token)
+        git(["clone", "--local", "--no-checkout", clone, checkout])
+        git(["fetch", "--force", "--no-tags", "origin"] + refs, cwd=checkout)
     git(["checkout", "--quiet", "--detach", pr["head"]["sha"]], cwd=checkout)
     return {"head": pr["head"]["sha"], "base": f"origin/{base}"}
 
