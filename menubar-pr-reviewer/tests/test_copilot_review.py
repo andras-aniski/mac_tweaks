@@ -83,6 +83,17 @@ def test_a_missing_result_shows_why_the_session_stopped_not_a_subagents_report(t
         cr.read_result(str(tmp_path))
 
 
+def test_a_missing_result_shows_the_error_copilot_printed_before_its_session_started(tmp_path):
+    (tmp_path / "copilot.log").write_text(
+        json.dumps({"type": "session.mcp_server_status_changed", "data": {"status": "pending"}}) + "\n"
+        "Error: Failed to load models\n\nError: Model catalog request timed out after 30000ms\n\n"
+        "Copilot could not retrieve the list of available models.\n\nTo resolve this, try the following:\n")
+    with pytest.raises(RuntimeError) as e:
+        cr.read_result(str(tmp_path))
+    assert str(e.value).startswith("Copilot stopped before writing a result: "
+                                   "Failed to load models: Model catalog request timed out after 30000ms\n\nLog: ")
+
+
 def test_duplicates_are_recognised():
     existing = [{"author": "bob", "path": "src/a.ts", "line": 11, "body": "This  should handle the NULL case."}]
     assert cr.already_on_pr(comment(body="this should handle the null case", title=""), existing)
@@ -277,6 +288,45 @@ def test_reviews_of_the_same_repo_can_prepare_at_once(tmp_path, monkeypatch):
     for thread in threads:
         thread.join()
     assert errors == []
+
+
+def test_prepare_checks_out_the_head_while_the_pull_ref_lags_behind(tmp_path, monkeypatch):
+    def run(*args, cwd=tmp_path):
+        return cr.subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+    upstream, work, fork = tmp_path / "upstream.git", tmp_path / "work", tmp_path / "fork"
+    run("init", "--quiet", "--bare", str(upstream))
+    run("init", "--quiet", str(work))
+    run("config", "user.name", "T", cwd=work)
+    run("config", "user.email", "t@example.com", cwd=work)
+    run("remote", "add", "origin", str(upstream), cwd=work)
+    run("commit", "--quiet", "--allow-empty", "-m", "base", cwd=work)
+    run("push", "--quiet", "origin", "HEAD:refs/heads/master", cwd=work)
+    run("commit", "--quiet", "--allow-empty", "-m", "first push", cwd=work)
+    run("push", "--quiet", "origin", "HEAD:refs/heads/feature", "HEAD:refs/pull/1/head", "HEAD:refs/pull/2/head",
+        cwd=work)
+    clones = tmp_path / "clones"
+    run("clone", "--quiet", "--no-checkout", str(upstream), str(clones / "acme" / "web"))
+    run("commit", "--quiet", "--allow-empty", "-m", "second push", cwd=work)
+    run("push", "--quiet", "origin", "HEAD:refs/heads/feature", cwd=work)  # GitHub hasn't moved the pull refs yet
+    head = run("rev-parse", "HEAD", cwd=work)
+    run("clone", "--quiet", str(work), str(fork))
+    run("commit", "--quiet", "--allow-empty", "-m", "fork push", cwd=fork)  # on a fork's branch only
+    fork_head = run("rev-parse", "HEAD", cwd=fork)
+    heads = {"1": head, "2": fork_head}
+
+    def api(method, path, token, body=None, accept=None):
+        if method == "POST":
+            return {"data": {"repository": {"pullRequest": {"closingIssuesReferences": {"nodes": []}}}}}
+        return "diff" if accept else {"base": {"ref": "master"}, "head": {"sha": heads[path.rsplit("/", 1)[1]]}}
+
+    monkeypatch.setattr(cr, "api", api)
+    monkeypatch.setattr(cr, "existing_comments", lambda key, token: [])
+    monkeypatch.setattr(cr, "pr_markdown", lambda key, pr, issues, admins: "")
+    assert cr.prepare("acme/web#1", str(tmp_path / "review1"), str(clones), None)["head"] == head
+    assert run("rev-parse", "HEAD", cwd=tmp_path / "review1" / "checkout") == head
+    with pytest.raises(RuntimeError, match="GitHub hasn't updated"):
+        cr.prepare("acme/web#2", str(tmp_path / "review2"), str(clones), None)
 
 
 def test_the_prompt_leaves_out_the_subagents_that_are_off():

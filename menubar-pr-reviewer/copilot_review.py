@@ -266,7 +266,8 @@ def prepare(key, workdir, clones_dir, token, admins=()):
     # One full clone per repo, reused. Copilot's sandbox only reads inside the review folder, so each review gets
     # its own clone of it there (hardlinked, so it's quick): a worktree's .git would point outside.
     clone = os.path.join(clones_dir, owner, name)
-    base = pr["base"]["ref"]
+    base, head = pr["base"]["ref"], pr["head"]["sha"]
+    base_ref = f"+refs/heads/{base}:refs/remotes/origin/{base}"
     refs = [f"+refs/remotes/origin/{base}:refs/remotes/origin/{base}", f"+refs/prr/{number}:refs/prr/{number}"]
     checkout = os.path.join(workdir, "checkout")
     remove_checkout(workdir)
@@ -277,12 +278,17 @@ def prepare(key, workdir, clones_dir, token, admins=()):
         if partial or not os.path.isdir(os.path.join(clone, ".git")):  # partial: git would fetch blobs in the sandbox
             shutil.rmtree(clone, ignore_errors=True)
             git(["clone", "--no-checkout", f"https://github.com/{owner}/{name}.git", clone], token=token)
-        git(["fetch", "--force", "origin", f"+refs/heads/{base}:refs/remotes/origin/{base}",
-             f"+refs/pull/{number}/head:refs/prr/{number}"], cwd=clone, token=token)
+        try:  # by its sha: GitHub can move refs/pull/N/head minutes, even an hour, after a push
+            git(["fetch", "--force", "origin", base_ref, f"+{head}:refs/prr/{number}"], cwd=clone, token=token)
+        except RuntimeError:  # a fork's commit, which GitHub serves only once refs/pull/N/head has it
+            git(["fetch", "--force", "origin", base_ref, f"+refs/pull/{number}/head:refs/prr/{number}"],
+                cwd=clone, token=token)
+        if subprocess.run(["git", "cat-file", "-e", f"{head}^{{commit}}"], cwd=clone).returncode:
+            raise RuntimeError(f"GitHub hasn't updated #{number}'s code to its last push yet. Retry in a few minutes.")
         git(["clone", "--local", "--no-checkout", clone, checkout])
         git(["fetch", "--force", "--no-tags", "origin"] + refs, cwd=checkout)
-    git(["checkout", "--quiet", "--detach", pr["head"]["sha"]], cwd=checkout)
-    return {"head": pr["head"]["sha"], "base": f"origin/{base}"}
+    git(["checkout", "--quiet", "--detach", head], cwd=checkout)
+    return {"head": head, "base": f"origin/{base}"}
 
 
 def remove_checkout(workdir):
@@ -410,12 +416,15 @@ def why_no_result(workdir):
     """(the error that stopped the session, the orchestrator's last words) from the run's JSONL output; each None if
     there's none. A subagent's words aren't the orchestrator's: they're its report, e.g. its findings."""
     error = said = None
+    printed = []  # plain "Error: " lines, as when Copilot can't reach its server before the session starts
     try:
         with open(os.path.join(workdir, "copilot.log"), errors="ignore") as f:
             for line in f:
                 try:
                     event = json.loads(line)
                 except ValueError:
+                    if line.startswith("Error: "):
+                        printed.append(line[len("Error: "):].strip())
                     continue
                 data = event.get("data") or {}
                 if event.get("type") == "session.error" and data.get("message"):
@@ -427,7 +436,7 @@ def why_no_result(workdir):
                     said = data["content"].strip()
     except FileNotFoundError:
         pass
-    return error, said[:600] if said else None
+    return error or ": ".join(printed) or None, said[:600] if said else None
 
 
 def _events(session_id):
