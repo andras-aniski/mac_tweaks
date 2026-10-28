@@ -11,11 +11,12 @@ Read the diff, then the surrounding code it depends on: callers, callees, types,
 
 - bugs: wrong logic, off-by-one errors, unhandled null or error cases, race conditions, broken edge cases
 - regressions: behaviour the change breaks elsewhere, changed contracts that callers still rely on
+- compatibility: a changed public contract (exported API, event, request or response shape, configuration, persisted data, schema) that existing users or stored data still depend on, without the versioning, deprecation or migration path it needs; test mocks and fixtures the PR changes that no longer match the real shape
+- bug fixes that treat a symptom: the fix hides the failure in one place while its cause still breaks other paths
 - security problems: injection, leaked secrets, missing authorization or validation
 - performance problems that matter at the code's real scale
-- missing or wrong tests for the changed behaviour
 
-Only report what you can back with a concrete scenario: the input or state and what goes wrong. Skip style preferences and anything a linter or formatter would catch.
+Only report what you can back with a concrete scenario: the input or state and what goes wrong. Skip style preferences and anything a linter or formatter would catch. Leave test coverage and simplifications to the other reviewers.
 
 Reply with JSON only:
 

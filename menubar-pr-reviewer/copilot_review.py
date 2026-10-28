@@ -35,6 +35,8 @@ AGENT_LABELS = {
     "prr-acceptance": "Acceptance criteria",
     "prr-docs": "Docs alignment",
     "prr-code": "Technical correctness",
+    "prr-tests": "Test coverage",
+    "prr-simplicity": "Simplicity",
     "prr-conventions": "Repo conventions",
 }
 SUBAGENTS = [name for name in AGENT_LABELS if name != "main"]

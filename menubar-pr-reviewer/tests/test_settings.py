@@ -137,7 +137,7 @@ def test_reviews_start_with_the_chosen_model_effort_context_and_subagents(app, m
     app._start_review(key(1))
     assert {k: started[0][k] for k in ("model", "effort", "context", "agents")} == {
         "model": "claude-opus-5.5", "effort": "high", "context": "long_context",
-        "agents": ["prr-acceptance", "prr-docs", "prr-code"]}
+        "agents": ["prr-acceptance", "prr-docs", "prr-code", "prr-tests", "prr-simplicity"]}
     job = app.state["reviews"][key(1)]
     assert (job["model"], job["effort"], job["context"]) == ("claude-opus-5.5", "high", "long_context")
 

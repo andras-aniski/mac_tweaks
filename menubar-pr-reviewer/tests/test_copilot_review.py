@@ -287,4 +287,14 @@ def test_the_prompt_leaves_out_the_subagents_that_are_off():
     assert "- `prr-code`:" in prompt and "- `prr-docs`:" in prompt
     assert "- `prr-acceptance`:" not in prompt and "- `prr-conventions`:" not in prompt
     assert "- `MUST-FIX`:" in prompt  # other lists stay whole
-    assert len(full.splitlines()) - len(prompt.splitlines()) == 2
+    assert len(full.splitlines()) - len(prompt.splitlines()) == len(cr.SUBAGENTS) - 2
+
+
+def test_each_subagent_has_its_instructions_and_a_label_for_its_comments():
+    import pr_reviewer
+    for agent in cr.SUBAGENTS:
+        with open(cr.os.path.join(cr.COPILOT_DIR, ".github", "agents", f"{agent}.agent.md")) as f:
+            assert f"\nname: {agent}\n" in f.read()
+    assert {f"prr-{source}" for source in pr_reviewer.ReviewWindow.SOURCES} == set(cr.SUBAGENTS)
+    full = cr.review_prompt("acme/web#1", "origin/main")
+    assert all(f"`{source}`" in full for source in pr_reviewer.ReviewWindow.SOURCES)

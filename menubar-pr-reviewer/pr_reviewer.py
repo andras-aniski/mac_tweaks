@@ -478,7 +478,7 @@ class ReviewWindow:
 
     WIDTH, HEIGHT = 760, 600
     SOURCES = {"acceptance": "Acceptance criteria", "docs": "Docs alignment", "code": "Technical correctness",
-               "conventions": "Repo conventions"}
+               "tests": "Test coverage", "simplicity": "Simplicity", "conventions": "Repo conventions"}
 
     def __init__(self, key, pr, result, fresh, skipped, inline, aic, actions, stale=False, summary_new=True):
         self.targets = []  # the buttons' targets: NSButton doesn't retain them
