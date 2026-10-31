@@ -1,4 +1,5 @@
 """Reading Copilot's result and credits, and what gets posted to GitHub."""
+import http.client
 import json
 
 import pytest
@@ -348,3 +349,70 @@ def test_each_subagent_has_its_instructions_and_a_label_for_its_comments():
     assert {f"prr-{source}" for source in pr_reviewer.ReviewWindow.SOURCES} == set(cr.SUBAGENTS)
     full = cr.review_prompt("acme/web#1", "origin/main")
     assert all(f"`{source}`" in full for source in pr_reviewer.ReviewWindow.SOURCES)
+
+
+class FakeResponse:
+    def __init__(self, body):
+        self.body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self):
+        return self.body
+
+
+def flaky_github(monkeypatch, *failures):
+    """urlopen raises these, one per request, then answers {}; returns the requests' methods."""
+    sent, failures = [], list(failures)
+
+    def urlopen(req, timeout):
+        sent.append(req.get_method())
+        if failures:
+            raise failures.pop(0)
+        return FakeResponse(b"{}")
+
+    monkeypatch.setattr(cr.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(cr.time, "sleep", lambda seconds: None)
+    return sent
+
+
+def http_error(code):
+    return cr.urllib.error.HTTPError("https://api.github.com", code, "error", {}, None)
+
+
+def test_a_dropped_connection_is_retried(monkeypatch):
+    sent = flaky_github(monkeypatch, http.client.RemoteDisconnected("Remote end closed connection without response"),
+                        TimeoutError("The read operation timed out"))
+    assert cr.api("GET", "/repos/acme/web/pulls/1", "token") == {}
+    assert sent == ["GET"] * 3
+
+
+def test_a_graphql_query_is_retried_on_a_bad_gateway(monkeypatch):
+    sent = flaky_github(monkeypatch, http_error(502))
+    assert cr.api("POST", "/graphql", "token", {"query": "{ viewer { login } }"}) == {}
+    assert len(sent) == 2
+
+
+def test_retries_give_up_after_a_few_tries(monkeypatch):
+    sent = flaky_github(monkeypatch, *[cr.urllib.error.URLError("handshake timed out")] * 5)
+    with pytest.raises(cr.urllib.error.URLError):
+        cr.api("GET", "/repos/acme/web/pulls/1", "token")
+    assert len(sent) == len(cr.RETRY_DELAYS) + 1
+
+
+def test_a_github_error_is_not_retried(monkeypatch):
+    sent = flaky_github(monkeypatch, http_error(404))
+    with pytest.raises(cr.urllib.error.HTTPError):
+        cr.api("GET", "/repos/acme/web/pulls/1", "token")
+    assert len(sent) == 1
+
+
+def test_a_review_is_not_posted_again_when_its_response_is_lost(monkeypatch):
+    sent = flaky_github(monkeypatch, http.client.RemoteDisconnected("Remote end closed connection without response"))
+    with pytest.raises(http.client.RemoteDisconnected):
+        cr.api("POST", "/repos/acme/web/pulls/1/reviews", "token", {"event": "COMMENT"})
+    assert sent == ["POST"]

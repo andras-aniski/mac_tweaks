@@ -801,8 +801,7 @@ def graphql(query, variables, token):
         data=json.dumps({"query": query, "variables": variables}).encode(),
         headers={"Authorization": f"bearer {token}", "Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        body = json.load(resp)
+    body = json.loads(copilot_review.read_url(req, timeout=20))
     data = body.get("data")
     if data is None:
         raise RuntimeError("; ".join(e.get("message", "?") for e in body.get("errors", [])) or "empty response")

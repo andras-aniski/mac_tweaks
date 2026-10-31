@@ -10,6 +10,8 @@ import shutil
 import signal
 import subprocess
 import threading
+import time
+import urllib.error
 import urllib.request
 
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -18,6 +20,7 @@ PROMPT_PATH = os.path.join(COPILOT_DIR, "review-prompt.md")
 SESSION_STATE = os.path.expanduser("~/.copilot/session-state")
 COPILOT_SETTINGS = os.path.expanduser("~/.copilot/settings.json")
 NANO_AIU = 1e9  # per AI credit
+RETRY_DELAYS = (1, 3)  # seconds before each retry of a GitHub request a flaky connection dropped
 CLONE_LOCKS = {}  # clone path -> Lock: reviews of one repo would race on its refs (cannot lock ref 'origin/master')
 
 # Comment levels, most important first, as in the sb-fe-mfe review guidelines
@@ -125,9 +128,21 @@ def api(method, path, token, body=None, accept="application/vnd.github+json"):
             "X-GitHub-Api-Version": "2022-11-28",
         },
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        data = resp.read()
+    # a POST that lost its response may have been applied: posting a review twice is worse than failing
+    data = read_url(req, timeout=30, retry=method == "GET" or path == "/graphql")
     return data.decode() if "diff" in accept else json.loads(data or b"null")
+
+
+def read_url(req, timeout, retry=True):
+    """The response body. A dropped connection, a timeout or a 502/503/504 is tried again, if retry."""
+    for delay in (*RETRY_DELAYS, None) if retry else (None,):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read()
+        except OSError as e:  # URLError, RemoteDisconnected and TimeoutError are all OSErrors
+            if delay is None or isinstance(e, urllib.error.HTTPError) and e.code not in (502, 503, 504):
+                raise
+        time.sleep(delay)
 
 
 def api_all(path, token):
